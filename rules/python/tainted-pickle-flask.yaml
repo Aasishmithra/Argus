@@ -1,0 +1,84 @@
+rules:
+  - id: tainted-pickle-flask
+    message: "The application may convert user-controlled data into an object, which
+      can lead to an insecure deserialization vulnerability. An attacker can
+      create a malicious serialized object, pass it to the application, and take
+      advantage of the deserialization process to perform Denial-of-service
+      (DoS), Remote code execution (RCE), or bypass access control measures. To
+      prevent this vulnerability, leverage data formats such as JSON or XML as
+      safer alternatives. If you need to deserialize user input in a specific
+      format, consider digitally signing the data before serialization to
+      prevent tampering. For more information, see: [Deserialization
+      prevention](https://cheatsheetseries.owasp.org/cheatsheets/Deserializatio\
+      n_Cheat_Sheet.html) The C implementations of the `pickle` module, called
+      `cPickle` or `_pickle`, are considered insecure."
+    severity: ERROR
+    metadata:
+      likelihood: MEDIUM
+      impact: HIGH
+      confidence: HIGH
+      category: security
+      subcategory:
+        - vuln
+      cwe:
+        - "CWE-502: Deserialization of Untrusted Data"
+      cwe2021-top25: true
+      cwe2022-top25: true
+      owasp:
+        - A08:2017 - Insecure Deserialization
+        - A08:2021 - Software and Data Integrity Failures
+      references:
+        - https://portswigger.net/web-security/deserialization
+        - https://dill.readthedocs.io/en/latest/index.html
+        - https://docs.python.org/3/library/pickle.html
+        - https://davidhamann.de/2020/04/05/exploiting-python-pickle/
+      technology:
+        - python
+        - flask
+      vulnerability_class:
+        - "Insecure Deserialization "
+    languages:
+      - python
+    mode: taint
+    pattern-sources:
+      - pattern-either:
+          - patterns:
+              - pattern-either:
+                  - patterns:
+                      - pattern-either:
+                          - patterns:
+                              - pattern: flask.request.$FUNCTION(...)
+                              - metavariable-regex:
+                                  metavariable: $FUNCTION
+                                  regex: ^(from_values|get_data|get_json)$
+                          - patterns:
+                              - pattern-either:
+                                  - pattern: flask.request.$PROPERTY
+                                  - pattern: flask.request.$PROPERTY[...]
+                                  - pattern: flask.request.$PROPERTY.get(...)
+                              - metavariable-regex:
+                                  metavariable: $PROPERTY
+                                  regex: ^(args|cookies|data|files|form|full_path|headers|input_stream|json|path|stream|values|view_args)$
+                  - patterns:
+                      - pattern: |
+                          @$APP.route(...)
+                          def $FUNC(..., $PARAM, ...):
+                            ...
+                      - focus-metavariable: $PARAM
+    pattern-sinks:
+      - patterns:
+          - focus-metavariable: $SINK
+          - pattern-either:
+              - patterns:
+                  - pattern: $PICKLE.$METHOD($SINK, ...)
+                  - metavariable-regex:
+                      metavariable: $PICKLE
+                      regex: ^(pickle|_pickle|cPickle)$
+                  - metavariable-regex:
+                      metavariable: $METHOD
+                      regex: ^(load|loads)$
+              - patterns:
+                  - pattern: $PACKAGE.Unpickler($SINK, ...)
+                  - metavariable-regex:
+                      metavariable: $PACKAGE
+                      regex: ^(pickle|_pickle|cPickle)$

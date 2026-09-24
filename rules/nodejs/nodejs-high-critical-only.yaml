@@ -1,0 +1,60 @@
+rules:
+  - id: nodejs-dangerous-eval
+    pattern: eval($X)
+    message: "Avoid using eval - it can lead to remote code execution."
+    languages: [javascript, typescript]
+    severity: ERROR
+    metadata:
+      category: security
+      cwe: "CWE-95: Improper Neutralization of Directives in Dynamically Evaluated Code"
+      impact: high
+      confidence: HIGH
+      likelihood: HIGH
+
+  - id: nodejs-child-process-exec
+    pattern: require('child_process').exec($CMD)
+    message: "Use of child_process.exec() can lead to command injection."
+    languages: [javascript, typescript]
+    severity: ERROR
+    metadata:
+      category: security
+      cwe: "CWE-78: OS Command Injection"
+      impact: critical
+      confidence: HIGH
+      likelihood: HIGH
+
+  - id: nodejs-insecure-http
+    pattern: require("http").createServer($ARGS)
+    message: "HTTP server detected without TLS. Use HTTPS for secure transport."
+    languages: [javascript, typescript]
+    severity: ERROR
+    metadata:
+      category: security
+      cwe: "CWE-319: Cleartext Transmission of Sensitive Information"
+      impact: high
+      confidence: HIGH
+      likelihood: HIGH
+
+  - id: nodejs-hardcoded-secrets
+    pattern-regex: 'const\s+\w+\s*=\s*["''](?i:[a-z0-9_-]{32,})["'']'
+    message: "Hardcoded secret or token detected."
+    languages: [javascript, typescript]
+    severity: WARNING
+    metadata:
+      category: secrets
+      cwe: "CWE-798: Use of Hard-coded Credentials"
+      impact: critical
+      confidence: HIGH
+      likelihood: HIGH
+
+  - id: nodejs-insecure-crypto
+    pattern: crypto.createCipher($ALG, $KEY)
+    message: "Avoid using crypto.createCipher — it uses insecure algorithms."
+    languages: [javascript, typescript]
+    severity: ERROR
+    metadata:
+      category: security
+      cwe: "CWE-327: Use of a Broken or Risky Cryptographic Algorithm"
+      impact: high
+      confidence: HIGH
+      likelihood: HIGH

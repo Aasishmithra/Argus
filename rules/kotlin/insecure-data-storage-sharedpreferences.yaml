@@ -1,0 +1,20 @@
+# 20-High-Confidence-Rulesets/DataStorage/insecure-data-storage-sharedpreferences.yaml
+rules:
+  - id: insecure-data-storage-sharedpreferences
+    message: "Sensitive data stored in SharedPreferences without encryption. Consider using encrypted storage."
+    severity: WARNING
+    languages: [kotlin]
+    patterns:
+      - pattern: |
+          val $PREFS = $CONTEXT.getSharedPreferences($NAME, $MODE)
+      - pattern-not: |
+          $PREFS.edit().putString($KEY, encrypt($VALUE)).apply()
+    metadata: # THIS METADATA BLOCK IS ESSENTIAL IF MISSING
+      category: security
+      subcategory: data-storage
+      cwe: "CWE-312: Cleartext Storage of Sensitive Information"
+      confidence: MEDIUM
+      impact: HIGH
+      likelihood: HIGH
+      owasp: "M2: Insecure Data Storage"
+      vulnerability_class: "Insecure Data Storage"
