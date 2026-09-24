@@ -1,0 +1,146 @@
+# Sphere AI/LLM SAST ruleset (Semgrep)
+# =============================================================================
+# Source: 05_CICD_Pipeline/sphere_llm_semgrep.yml (KR5), trimmed for adoption
+# into the multi_sast pipeline. Three rules from the original ZIP are handled
+# elsewhere and REMOVED here to avoid double-firing:
+#
+#   * sphere-jinja-unsandboxed-render
+#       -> merged into mhealth.python.llm.prompt-injection-jinja-render
+#          (sast_rulepack.yml #4) which now includes the SandboxedEnvironment
+#          negation and the SSTI shapes.
+#
+#   * sphere-phi-field-logged
+#       -> merged into mhealth.python.log.sensitive-data (sast_rulepack.yml #8)
+#          whose regex now covers PHI names (diagnosis_code, member_age,
+#          consultation_data, patient, payload, phi) and LLM I/O names
+#          (prompt, messages, response_text, model_output, completion).
+#
+#   * sphere-outbound-fetch-from-request-url
+#       -> superseded by mhealth.python.llm.suspicious-url-fetch-no-allowlist
+#          (sast_rulepack.yml #10) which widens the URL name regex, adds
+#          httpx / urllib, and honours the is_allowlisted() sanitizer.
+#
+# Severity ERROR = block build (Critical/High), WARNING = report-only.
+# =============================================================================
+rules:
+
+  # ---------------------------------------------------------------- LLM01 / PI-*
+  # NOTE (multi_sast tuning): the original ZIP regex `.*(prompt|system|
+  # instruction|message|content).*` fires on any variable named error_message,
+  # log_message, kafka_message etc. — almost all non-LLM. We tighten it to
+  # (a) require the metavariable name to START with a prompt-shaped prefix
+  # (drops `error_message`, keeps `user_message`), and
+  # (b) restrict the rule to files that plausibly touch an LLM (services
+  # under prompt/, llms/, evaluation/, playground, or the prompt render
+  # pipeline). This trades some theoretical recall against 100+ FPs seen on
+  # sphere-platform's non-LLM services.
+  - id: sphere-prompt-built-from-request-input
+    languages: [python]
+    severity: ERROR
+    message: >
+      LLM prompt appears to be built by string concatenation / f-string / .format
+      from request input. Untrusted input concatenated into a prompt is a prompt-
+      injection vector (OWASP LLM01). Pass user input as data in a separate
+      message/param and keep instructions in a fixed system prompt.
+    metadata:
+      owasp: LLM01
+      cwe: CWE-77
+      testcase: "PI-01..PI-05"
+      category: llm-security
+    paths:
+      include:
+        - "**/prompt/**"
+        - "**/prompts/**"
+        - "**/llms/**"
+        - "**/llm/**"
+        - "**/evaluation/**"
+        - "**/playground*"
+        - "**/agent*"
+        - "**/agents/**"
+        - "**/inference/**"
+    patterns:
+      - pattern-either:
+          - pattern: |
+              $MSG = f"...{$REQ}..."
+          - pattern: |
+              $MSG = "..." + $REQ
+          - pattern: |
+              $MSG = "...".format(..., $REQ, ...)
+      - metavariable-regex:
+          metavariable: $MSG
+          # Match prompt-shaped names ONLY at the start of the identifier so
+          # `error_message` / `log_message` / `kafka_message` never fire.
+          regex: (?i)^(prompt|system_?prompt|user_?prompt|assistant_?prompt|system_?message|user_?message|instruction|instructions|full_?prompt|final_?prompt|rendered_?prompt|input_?prompt)([_a-z0-9]*)$
+
+  # ---------------------------------------------------------------- LLM01 / PI-04
+  - id: sphere-caller-supplied-system-prompt
+    languages: [python]
+    severity: ERROR
+    message: >
+      A caller-supplied 'system_prompt' / 'instruction' field is being passed to
+      the model without validation. Callers must not be able to redefine model
+      policy (OWASP LLM01, test PI-04). Validate against an allow-list or reject
+      caller-provided system prompts.
+    metadata:
+      owasp: LLM01
+      testcase: "PI-04"
+      category: llm-security
+    patterns:
+      - pattern-either:
+          - pattern: $PARAMS["system_prompt"]
+          - pattern: $PARAMS.get("system_prompt", ...)
+          - pattern: $REQ.system_prompt
+
+  # ---------------------------------------------------------------- LLM05 - output handling
+  # NOTE (multi_sast tuning): the original ZIP regex matches on any variable
+  # containing "content" / "response" — which fires on `json.loads(response.
+  # model_dump_json())` (pydantic round-trip, safe) and internal call-response
+  # helpers. We tighten to (a) require the variable name to unambiguously name
+  # an LLM completion, and (b) restrict to LLM-adapter/engine files.
+  - id: sphere-model-output-used-without-validation
+    languages: [python]
+    severity: WARNING
+    message: >
+      Model output parsed as JSON and used without schema validation. Unvalidated
+      model output can break downstream adjudication/rendering (OWASP LLM05,
+      tests OH-01/OH-02). Validate against a strict schema (e.g. pydantic) before
+      use.
+    metadata:
+      owasp: LLM05
+      cwe: CWE-20
+      testcase: "OH-01,OH-02"
+      category: llm-security
+    paths:
+      include:
+        - "**/llms/**"
+        - "**/llm/**"
+        - "**/inference/**"
+        - "**/agent*"
+        - "**/agents/**"
+        - "**/evaluation/**"
+    patterns:
+      - pattern: json.loads($RESP)
+      - metavariable-regex:
+          metavariable: $RESP
+          # Tighter: name must clearly be a model/LLM output, not any "response"
+          # or "content" (which match request builders, pydantic round-trips,
+          # cache lookups).
+          regex: (?i)^(model_output|llm_output|llm_response|model_response|completion|completions|chat_completion|assistant_(reply|message|response)|generated_text|generation_text|raw_completion)$
+      - pattern-not-inside: |
+          $SCHEMA.model_validate(...)
+
+  # ---------------------------------------------------------------- Secrets
+  - id: sphere-hardcoded-app-token
+    languages: [python]
+    severity: ERROR
+    message: >
+      Hard-coded X-App-Token / API token detected. Sphere uses a static X-App-
+      Token; tokens must come from a secret store, never source (finding CI-01).
+      Rotate any committed token.
+    metadata:
+      owasp: LLM03
+      cwe: CWE-798
+      finding: "CI-01"
+      category: secrets
+    patterns:
+      - pattern-regex: (?i)(x-app-token|app_token|api_token)["'\s:=]+[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}

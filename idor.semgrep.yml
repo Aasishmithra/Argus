@@ -1,0 +1,487 @@
+# =============================================================================
+# IDOR (Insecure Direct Object Reference) — cross-language rulepack
+# =============================================================================
+# What this catches:
+#   A route handler receives a resource ID from a caller (URL path / query
+#   string / request body / header) and passes it to a DB fetch (SQLAlchemy /
+#   Django ORM / JPA / Spring Data / GORM) with NO authorization / ownership
+#   check between the request boundary and the DB access. The caller can then
+#   substitute another user's ID and read/modify that user's resource.
+#
+# What we mean by "sanitizer":
+#   IDOR does NOT have a language-native sanitizer the way SQLi has
+#   prepared-statement parameter binding. Every project's authz function is
+#   named differently: check_ownership() / authorize() / verify_access() /
+#   Preconditions.checkOwnership() / authzService.check() etc. This rulepack
+#   enumerates the common conventions — you should EXTEND the sanitizer list
+#   with the exact function/method your codebase calls before flipping the
+#   severity from WARNING to ERROR.
+#
+# Severity: WARNING. Every finding needs a human review because a codebase-
+# specific authz function outside the sanitizer list will FP the rule. Once
+# your codebase's convention is added to sanitizers, the FP rate drops sharply.
+#
+# CWE-639 / OWASP A01:2021 Broken Access Control.
+# =============================================================================
+
+rules:
+
+  # -------------------------------------------------------------------------
+  # PYTHON — FastAPI / Flask handlers with SQLAlchemy / Django-ORM sinks
+  # -------------------------------------------------------------------------
+  - id: mhealth.python.access-control.idor-handler-fetch-by-id-no-authz
+    languages: [python]
+    severity: WARNING
+    message: >
+      Route handler receives an ID-shaped path/query parameter and passes it
+      directly to a DB fetch — no ownership check between the request boundary
+      and the DB access. This is an Insecure Direct Object Reference (IDOR,
+      OWASP A01 / CWE-639): any authenticated caller can substitute another
+      user's ID and read or modify that user's resource.
+
+      Fix: (a) call an ownership function such as check_ownership(id,
+      current_user) / authorize(...) / verify_access(...) before the fetch,
+      or (b) scope the fetch to the caller by adding an owner clause, e.g.
+      session.query(Order).filter(Order.id == id,
+      Order.owner_id == current_user.id).first().
+
+      NOTE: this rule's sanitizer list enumerates common function names. If
+      your codebase's authorization check has a different name, add it under
+      pattern-sanitizers to avoid false positives.
+    metadata:
+      cwe: "CWE-639"
+      owasp: "A01:2021 Broken Access Control"
+      category: security
+      confidence: MEDIUM
+      likelihood: HIGH
+      impact: HIGH
+    mode: taint
+    # ------------------------------------------------------------------
+    # SOURCES: FastAPI + Flask route-handler parameters whose name looks
+    # like an ID. Uses focus-metavariable to bind taint on the parameter
+    # identifier itself, not the whole handler declaration.
+    # ------------------------------------------------------------------
+    pattern-sources:
+      # FastAPI-style: @router.<method>(...) def handler(id_param, ...)
+      - patterns:
+          - pattern-either:
+              - pattern: |
+                  @$ROUTER.get(...)
+                  def $F(..., $ID, ...):
+                      ...
+              - pattern: |
+                  @$ROUTER.post(...)
+                  def $F(..., $ID, ...):
+                      ...
+              - pattern: |
+                  @$ROUTER.put(...)
+                  def $F(..., $ID, ...):
+                      ...
+              - pattern: |
+                  @$ROUTER.patch(...)
+                  def $F(..., $ID, ...):
+                      ...
+              - pattern: |
+                  @$ROUTER.delete(...)
+                  def $F(..., $ID, ...):
+                      ...
+              - pattern: |
+                  @$ROUTER.get(...)
+                  async def $F(..., $ID, ...):
+                      ...
+              - pattern: |
+                  @$ROUTER.post(...)
+                  async def $F(..., $ID, ...):
+                      ...
+              - pattern: |
+                  @$ROUTER.put(...)
+                  async def $F(..., $ID, ...):
+                      ...
+              - pattern: |
+                  @$ROUTER.patch(...)
+                  async def $F(..., $ID, ...):
+                      ...
+              - pattern: |
+                  @$ROUTER.delete(...)
+                  async def $F(..., $ID, ...):
+                      ...
+          - focus-metavariable: $ID
+          - metavariable-regex:
+              metavariable: $ID
+              # ID-shaped names: anything ending in id / uuid / slug / key /
+              # no / num / _pk. Anchored so `error_message` etc. don't match.
+              regex: (?i)^[a-z_]*(id|uuid|slug|no|num|pk)([_a-z0-9]*)?$
+      # Flask/Django-style: view_args / request.args.get for an id key
+      - pattern: request.view_args[$K]
+      - pattern: request.args.get("$K", ...)
+      - pattern: request.args.get("$K")
+      - pattern: request.form.get("$K", ...)
+      - pattern: request.form.get("$K")
+      - pattern: request.GET.get("$K", ...)
+      - pattern: request.POST.get("$K", ...)
+      - pattern: kwargs["$K"]
+    # ------------------------------------------------------------------
+    # SINKS: any DB fetch that uses the tainted ID directly as the key.
+    # SQLAlchemy, Django ORM, and generic repository shapes.
+    # ------------------------------------------------------------------
+    pattern-sinks:
+      # Direct-ORM sinks (SQLAlchemy / Django) — always fetch-by-id shape
+      - pattern-either:
+          # SQLAlchemy
+          - pattern: $DB.query($MODEL).get($TAINT)
+          - pattern: $DB.query($MODEL).filter($MODEL.id == $TAINT).first()
+          - pattern: $DB.query($MODEL).filter($MODEL.id == $TAINT).one()
+          - pattern: $DB.query($MODEL).filter($MODEL.id == $TAINT).one_or_none()
+          - pattern: $DB.query($MODEL).filter_by(id=$TAINT).first()
+          - pattern: $DB.query($MODEL).filter_by(id=$TAINT).one()
+          - pattern: $DB.query($MODEL).filter_by(id=$TAINT).one_or_none()
+          - pattern: $SESSION.get($MODEL, $TAINT)
+          - pattern: $MODEL.query.get($TAINT)
+          - pattern: $MODEL.query.filter($MODEL.id == $TAINT).first()
+          - pattern: $MODEL.query.filter_by(id=$TAINT).first()
+          # Django ORM
+          - pattern: $MODEL.objects.get(id=$TAINT)
+          - pattern: $MODEL.objects.get(pk=$TAINT)
+          - pattern: $MODEL.objects.get(uuid=$TAINT)
+          - pattern: $MODEL.objects.filter(id=$TAINT).first()
+          - pattern: $MODEL.objects.filter(pk=$TAINT).first()
+          - pattern: get_object_or_404($MODEL, id=$TAINT)
+          - pattern: get_object_or_404($MODEL, pk=$TAINT)
+          # Repository / DAO fixed-name conventions
+          - pattern: $REPO.find_by_id($TAINT)
+          - pattern: $REPO.get_by_id($TAINT)
+          - pattern: $REPO.findById($TAINT)
+          - pattern: $REPO.get_by_id($TAINT, ...)
+          - pattern: $REPO.find_by_id($TAINT, ...)
+      # Generic service-method sinks: $SERVICE.$METHOD($TAINT, ...) where the
+      # method name signals a "fetch / mutate by id" verb. Tainted value must
+      # actually flow to the call — narrows the population sharply.
+      - patterns:
+          - pattern-either:
+              - pattern: $SERVICE.$METHOD($TAINT)
+              - pattern: $SERVICE.$METHOD($TAINT, ...)
+              - pattern: $SERVICE.$METHOD(..., $TAINT)
+              - pattern: $SERVICE.$METHOD(..., $TAINT, ...)
+          - metavariable-regex:
+              metavariable: $METHOD
+              # verbs that plausibly act on a specific resource by id: any
+              # get_/find_/fetch_/load_/retrieve_/update_/delete_/remove_/
+              # activate_/deactivate_/enable_/disable_/deactivate_/archive_
+              # method with at least one word after the verb. Excludes broad
+              # "get_all" style methods since they don't imply a lookup by id.
+              regex: ^(get|find|fetch|load|retrieve|read|update|delete|remove|activate|deactivate|enable|disable|archive|approve|reject|cancel|resend|refresh|reload|process)_[a-z][a-z0-9_]*$
+          - metavariable-pattern:
+              metavariable: $METHOD
+              patterns:
+                - pattern-not-regex: ^(get|find|fetch|load|retrieve|read)_all(_.*)?$
+                - pattern-not-regex: ^(get|find|fetch|load|retrieve|read)_list(_.*)?$
+                - pattern-not-regex: ^(get|find|fetch|load|retrieve|read)_paginated(_.*)?$
+    # ------------------------------------------------------------------
+    # SANITIZERS: any call that plausibly checks ownership on the tainted
+    # value. EXTEND with your codebase's specific function names.
+    # ------------------------------------------------------------------
+    pattern-sanitizers:
+      - pattern-either:
+          - pattern: check_ownership(..., $TAINT, ...)
+          - pattern: check_ownership($TAINT, ...)
+          - pattern: verify_ownership(..., $TAINT, ...)
+          - pattern: verify_ownership($TAINT, ...)
+          - pattern: enforce_ownership(..., $TAINT, ...)
+          - pattern: enforce_ownership($TAINT, ...)
+          - pattern: assert_owner(..., $TAINT, ...)
+          - pattern: assert_owner($TAINT, ...)
+          - pattern: assert_ownership(..., $TAINT, ...)
+          - pattern: assert_ownership($TAINT, ...)
+          - pattern: authorize(..., $TAINT, ...)
+          - pattern: authorize($TAINT, ...)
+          - pattern: verify_access(..., $TAINT, ...)
+          - pattern: verify_access($TAINT, ...)
+          - pattern: check_access(..., $TAINT, ...)
+          - pattern: check_access($TAINT, ...)
+          - pattern: has_permission(..., $TAINT, ...)
+          - pattern: has_permission($TAINT, ...)
+          - pattern: can_access(..., $TAINT, ...)
+          - pattern: can_access($TAINT, ...)
+          - pattern: ensure_access(..., $TAINT, ...)
+          - pattern: ensure_access($TAINT, ...)
+          - pattern: require_permission(..., $TAINT, ...)
+          - pattern: require_permission($TAINT, ...)
+    options:
+      taint_assume_safe_booleans: true
+      taint_assume_safe_numbers: true
+
+  # -------------------------------------------------------------------------
+  # JAVA — JAX-RS / Spring handlers with JPA / Spring Data sinks
+  # -------------------------------------------------------------------------
+  - id: mhealth.java.access-control.idor-handler-fetch-by-id-no-authz
+    languages: [java]
+    severity: WARNING
+    message: >
+      HTTP handler binds a caller-controlled ID (via @PathParam / @QueryParam /
+      @PathVariable / @RequestParam / @RequestBody field) and passes it
+      directly to a JPA / Spring Data lookup. No authorization function is
+      called on the value between the binding and the fetch. This is an IDOR
+      (OWASP A01 / CWE-639): a caller with any valid token can substitute
+      another owner's ID.
+
+      Fix: call an ownership check such as
+      authorizationService.check(user, resource) /
+      Preconditions.checkOwnership(id, principal) /
+      SecurityContext.assertCanAccess(id) before the fetch, or scope the
+      query to include the caller's identity in a WHERE clause.
+
+      NOTE: this rule's sanitizer list enumerates common conventions. If your
+      codebase uses a different method name, add it under pattern-sanitizers.
+    metadata:
+      cwe: "CWE-639"
+      owasp: "A01:2021 Broken Access Control"
+      category: security
+      confidence: MEDIUM
+      likelihood: HIGH
+      impact: HIGH
+    mode: taint
+    # ------------------------------------------------------------------
+    # SOURCES: JAX-RS + Spring binding annotations on handler parameters.
+    # Enumerate specific annotations because @$X won't parse under Semgrep's
+    # Java parser (per the same limitation the imported Kotlin rule hit).
+    # ------------------------------------------------------------------
+    # Semgrep's Java parser requires a full method-declaration shape (visibility
+    # + return type + name + body). We enumerate each supported annotation
+    # against the two most common declarators (public/protected).
+    pattern-sources:
+      # JAX-RS
+      - patterns:
+          - pattern-either:
+              - pattern: |
+                  public $R $M(..., @PathParam(...) $T $ID, ...) { ... }
+              - pattern: |
+                  protected $R $M(..., @PathParam(...) $T $ID, ...) { ... }
+              - pattern: |
+                  public $R $M(..., @QueryParam(...) $T $ID, ...) { ... }
+              - pattern: |
+                  public $R $M(..., @FormParam(...) $T $ID, ...) { ... }
+              - pattern: |
+                  public $R $M(..., @HeaderParam(...) $T $ID, ...) { ... }
+              - pattern: |
+                  public $R $M(..., @MatrixParam(...) $T $ID, ...) { ... }
+              - pattern: |
+                  public $R $M(..., @CookieParam(...) $T $ID, ...) { ... }
+              # Spring
+              - pattern: |
+                  public $R $M(..., @PathVariable(...) $T $ID, ...) { ... }
+              - pattern: |
+                  public $R $M(..., @PathVariable $T $ID, ...) { ... }
+              - pattern: |
+                  public $R $M(..., @RequestParam(...) $T $ID, ...) { ... }
+              - pattern: |
+                  public $R $M(..., @RequestParam $T $ID, ...) { ... }
+              - pattern: |
+                  public $R $M(..., @RequestHeader(...) $T $ID, ...) { ... }
+              - pattern: |
+                  public $R $M(..., @RequestHeader $T $ID, ...) { ... }
+              - pattern: |
+                  public $R $M(..., @RequestBody $T $ID, ...) { ... }
+          - focus-metavariable: $ID
+    # ------------------------------------------------------------------
+    # SINKS: JPA + Spring Data + native-query fetch-by-id shapes.
+    # ------------------------------------------------------------------
+    pattern-sinks:
+      - pattern-either:
+          # JPA / Hibernate
+          - pattern: $EM.find($CLASS, $TAINT)
+          - pattern: $EM.getReference($CLASS, $TAINT)
+          - pattern: $EM.find($CLASS, $TAINT, ...)
+          # Spring Data
+          - pattern: $REPO.findById($TAINT)
+          - pattern: $REPO.getById($TAINT)
+          - pattern: $REPO.getReferenceById($TAINT)
+          - pattern: $REPO.findOne($TAINT)
+          # Hibernate Session
+          - pattern: $SESSION.get($CLASS, $TAINT)
+          - pattern: $SESSION.load($CLASS, $TAINT)
+          # Native query with ID parameter
+          - pattern: $EM.createNativeQuery($QUERY).setParameter($POS, $TAINT)
+          - pattern: $EM.createQuery($QUERY).setParameter($POS, $TAINT)
+      # Generic service-method sinks — matches typed getX/findX/updateX/…
+      # method calls when the tainted value flows to any argument slot.
+      - patterns:
+          - pattern-either:
+              - pattern: $SERVICE.$METHOD($TAINT)
+              - pattern: $SERVICE.$METHOD($TAINT, ...)
+              - pattern: $SERVICE.$METHOD(..., $TAINT)
+              - pattern: $SERVICE.$METHOD(..., $TAINT, ...)
+          - metavariable-regex:
+              metavariable: $METHOD
+              # camelCase verbs indicating action on a specific resource.
+              # Match "getX", "findX", "findByX", "updateX", "deleteX", etc.
+              # First word must be a verb from the whitelist; rest is entity.
+              regex: ^(get|find|fetch|load|retrieve|read|update|delete|remove|activate|deactivate|enable|disable|archive|approve|reject|cancel|resend|refresh|reload|process|generate)([A-Z][a-zA-Z0-9]*)+$
+          - metavariable-pattern:
+              metavariable: $METHOD
+              patterns:
+                - pattern-not-regex: ^(get|find|fetch|load|retrieve|read)All(For.*)?$
+                - pattern-not-regex: ^(get|find|fetch|load|retrieve|read)List(For.*)?$
+                - pattern-not-regex: ^(get|find|fetch|load|retrieve|read)Paginated.*$
+    # ------------------------------------------------------------------
+    # SANITIZERS: any authorization call on the tainted value.
+    # Method-level annotations (@RolesAllowed / @PreAuthorize) are static
+    # exemptions handled by mhealth.java.jaxrs.handler-missing-authz-
+    # annotation — this rule handles the residual gap where an authz
+    # method IS called but not tied to the resource ID.
+    # ------------------------------------------------------------------
+    pattern-sanitizers:
+      # Explicit ownership-check calls
+      - pattern-either:
+          - pattern: $AUTHZ.check($TAINT, ...)
+          - pattern: $AUTHZ.check(..., $TAINT, ...)
+          - pattern: $AUTHZ.checkOwnership($TAINT, ...)
+          - pattern: $AUTHZ.checkOwnership(..., $TAINT, ...)
+          - pattern: $AUTHZ.checkAccess($TAINT, ...)
+          - pattern: $AUTHZ.checkAccess(..., $TAINT, ...)
+          - pattern: $AUTHZ.authorize($TAINT, ...)
+          - pattern: $AUTHZ.authorize(..., $TAINT, ...)
+          - pattern: $AUTHZ.canAccess($TAINT, ...)
+          - pattern: $AUTHZ.hasPermission($TAINT, ...)
+          - pattern: $AUTHZ.assertCanAccess($TAINT, ...)
+          - pattern: $AUTHZ.enforceOwnership($TAINT, ...)
+          - pattern: $AUTHZ.verifyOwnership($TAINT, ...)
+          - pattern: Preconditions.checkOwnership($TAINT, ...)
+          - pattern: SecurityContext.assertCanAccess($TAINT, ...)
+      # Parent-scoped fetches — a service call that receives the current-user
+      # id ALONGSIDE the target id is treated as ownership-scoped. This is the
+      # halodoc-flavoured convention (surveyed as
+      # `principalUserService.getUserMerchantLocation(getUserId(), $TAINT)`).
+      # Enumerate the specific user-context accessors so we don't over-clear
+      # taint from calls that just happen to pass an unrelated first arg.
+      - pattern-either:
+          - pattern: $S.$M(getUserId(), $TAINT, ...)
+          - pattern: $S.$M(getUserId(), $TAINT)
+          - pattern: $S.$M(..., getUserId(), $TAINT, ...)
+          - pattern: $S.$M($USER.getPrincipalId(), $TAINT, ...)
+          - pattern: $S.$M($USER.getGpid(), $TAINT, ...)
+          - pattern: $S.$M(UserContext.instance().getContext().getUser(), $TAINT, ...)
+          - pattern: $S.$M(UserContext.instance().getContext().getPrincipalUser(), $TAINT, ...)
+      # Direct comparison-then-fetch idiom
+      - pattern: |
+          if (!$OBJ.getOwnerId().equals($TAINT)) { ... }
+      - pattern: |
+          if (!$OBJ.getUserId().equals($TAINT)) { ... }
+    options:
+      taint_assume_safe_booleans: true
+      taint_assume_safe_numbers: true
+
+  # -------------------------------------------------------------------------
+  # GO — Gin / Beego / Echo handlers with GORM / database/sql sinks
+  # -------------------------------------------------------------------------
+  - id: mhealth.go.access-control.idor-handler-fetch-by-id-no-authz
+    languages: [go]
+    severity: WARNING
+    message: >
+      Go HTTP handler reads a resource ID from the request context (Gin's
+      c.Param / c.Query / c.PostForm; Beego's c.Ctx.Input.Param /
+      c.GetString; net/http mux.Vars) and passes it to a DB fetch with no
+      ownership check on the value. Any caller with a valid token can address
+      other owners' resources by ID (IDOR, OWASP A01 / CWE-639).
+
+      Fix: call an ownership check such as
+      authz.CheckOwnership(ctx, id) / authz.CanAccess(ctx, resource, id) on
+      the ID before the fetch, or scope the query to the caller identity
+      (e.g. db.Where("id = ? AND owner_id = ?", id, ctx.UserID).First(&obj)).
+
+      NOTE: extend the sanitizer list to include your codebase's exact
+      authorization function names.
+    metadata:
+      cwe: "CWE-639"
+      owasp: "A01:2021 Broken Access Control"
+      category: security
+      confidence: MEDIUM
+      likelihood: HIGH
+      impact: HIGH
+    mode: taint
+    # ------------------------------------------------------------------
+    # SOURCES: Gin, Beego, and net/http request accessors.
+    # ------------------------------------------------------------------
+    pattern-sources:
+      # Gin
+      - pattern: $CTX.Param($K)
+      - pattern: $CTX.Query($K)
+      - pattern: $CTX.PostForm($K)
+      - pattern: $CTX.DefaultQuery($K, ...)
+      - pattern: $CTX.GetHeader($K)
+      # Beego
+      - pattern: $CTX.Ctx.Input.Param($K)
+      - pattern: $CTX.Ctx.Input.Query($K)
+      - pattern: $CTX.GetString($K)
+      - pattern: $CTX.GetString($K, ...)
+      - pattern: $CTX.GetInt($K)
+      - pattern: $CTX.GetInt64($K)
+      - pattern: $CTX.GetInt($K, ...)
+      - pattern: $CTX.GetInt64($K, ...)
+      # net/http + gorilla mux
+      - pattern: mux.Vars($REQ)[$K]
+      - pattern: $REQ.URL.Query().Get($K)
+      - pattern: $REQ.FormValue($K)
+      - pattern: $REQ.PostFormValue($K)
+      - pattern: $REQ.Header.Get($K)
+    # ------------------------------------------------------------------
+    # SINKS: GORM + database/sql fetch-by-id shapes. Also covers raw SQL
+    # WHERE-id clauses that interpolate the tainted value.
+    # ------------------------------------------------------------------
+    pattern-sinks:
+      - pattern-either:
+          # GORM v2
+          - pattern: $DB.First(&$OBJ, $TAINT)
+          - pattern: $DB.Find(&$OBJ, $TAINT)
+          - pattern: $DB.Take(&$OBJ, $TAINT)
+          - pattern: $DB.Last(&$OBJ, $TAINT)
+          - pattern: $DB.Where("id = ?", $TAINT).First(&$OBJ)
+          - pattern: $DB.Where("id = ?", $TAINT).Find(&$OBJ)
+          - pattern: $DB.Where("id = ?", $TAINT).Take(&$OBJ)
+          # database/sql
+          - pattern: $DB.QueryRow($QUERY, $TAINT)
+          - pattern: $DB.QueryRowContext($CTX, $QUERY, $TAINT)
+          - pattern: $DB.Query($QUERY, $TAINT)
+          # Beego ORM
+          - pattern: $ORM.QueryTable($T).Filter("id", $TAINT).One(&$OBJ)
+          - pattern: $ORM.QueryTable($T).Filter("id", $TAINT).All(&$OBJ)
+      # Generic service-method sinks — matches PascalCase Get/Find/Process/…
+      # methods when the tainted value flows to any argument slot.
+      - patterns:
+          - pattern-either:
+              - pattern: $SERVICE.$METHOD($TAINT)
+              - pattern: $SERVICE.$METHOD($TAINT, ...)
+              - pattern: $SERVICE.$METHOD(..., $TAINT)
+              - pattern: $SERVICE.$METHOD(..., $TAINT, ...)
+          - metavariable-regex:
+              metavariable: $METHOD
+              regex: ^(Get|Find|Fetch|Load|Retrieve|Read|Update|Delete|Remove|Activate|Deactivate|Enable|Disable|Archive|Approve|Reject|Cancel|Resend|Refresh|Reload|Process|Generate)([A-Z][a-zA-Z0-9]*)+$
+          - metavariable-pattern:
+              metavariable: $METHOD
+              patterns:
+                - pattern-not-regex: ^(Get|Find|Fetch|Load|Retrieve|Read)All(For.*)?$
+                - pattern-not-regex: ^(Get|Find|Fetch|Load|Retrieve|Read)List(For.*)?$
+                - pattern-not-regex: ^(Get|Find|Fetch|Load|Retrieve|Read)Paginated.*$
+    # ------------------------------------------------------------------
+    # SANITIZERS
+    # ------------------------------------------------------------------
+    pattern-sanitizers:
+      - pattern-either:
+          - pattern: $AUTHZ.CheckOwnership($TAINT, ...)
+          - pattern: $AUTHZ.CheckOwnership(..., $TAINT, ...)
+          - pattern: $AUTHZ.CheckAccess($TAINT, ...)
+          - pattern: $AUTHZ.CheckAccess(..., $TAINT, ...)
+          - pattern: $AUTHZ.CanAccess($TAINT, ...)
+          - pattern: $AUTHZ.CanAccess(..., $TAINT, ...)
+          - pattern: $AUTHZ.HasPermission($TAINT, ...)
+          - pattern: $AUTHZ.HasPermission(..., $TAINT, ...)
+          - pattern: $AUTHZ.Authorize($TAINT, ...)
+          - pattern: $AUTHZ.Authorize(..., $TAINT, ...)
+          - pattern: $AUTHZ.EnforceOwnership($TAINT, ...)
+          - pattern: $AUTHZ.VerifyOwnership($TAINT, ...)
+          - pattern: $AUTHZ.AssertCanAccess($TAINT, ...)
+          - pattern: checkOwnership($TAINT, ...)
+          - pattern: checkAccess($TAINT, ...)
+          - pattern: authorize($TAINT, ...)
+    options:
+      taint_assume_safe_booleans: true
+      taint_assume_safe_numbers: true

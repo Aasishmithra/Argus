@@ -1,0 +1,114 @@
+# Webhook URLs + Misconfigurations (Semgrep)
+# =============================================================================
+# Source: 05_CICD_Pipeline/sast_webhook_misconfig.semgrep.yml (KR5), trimmed
+# for adoption into the multi_sast pipeline. Two rules from the original ZIP
+# are already covered elsewhere and REMOVED here to avoid double-firing:
+#
+#   * dockerfile-runs-as-root  — covered by the auto-loaded p/dockerfile pack
+#   * dockerfile-latest-tag    — covered by the auto-loaded p/dockerfile pack
+#
+# Severity ERROR = block build (Critical/High), WARNING = report-only.
+# =============================================================================
+rules:
+
+  # ─────────────────────────── Webhook URLs (treat as secrets/exfil channels)
+
+  - id: hardcoded-slack-webhook
+    languages: [generic]
+    severity: ERROR
+    message: Hardcoded Slack incoming-webhook URL (embeds a secret token; exfil channel). Move to a secret store.
+    metadata:
+      category: webhook
+      cwe: CWE-798
+    patterns:
+      - pattern-regex: 'https://hooks\.slack\.com/services/T[A-Z0-9]+/B[A-Z0-9]+/[A-Za-z0-9]+'
+
+  - id: hardcoded-discord-webhook
+    languages: [generic]
+    severity: ERROR
+    message: Hardcoded Discord webhook URL (embeds a secret token). Move to a secret store.
+    metadata:
+      category: webhook
+      cwe: CWE-798
+    patterns:
+      - pattern-regex: 'https://(?:canary\.|ptb\.)?discord(?:app)?\.com/api/webhooks/\d+/[\w\-]+'
+
+  - id: hardcoded-teams-webhook
+    languages: [generic]
+    severity: ERROR
+    message: Hardcoded Microsoft Teams webhook URL. Move to a secret store.
+    metadata:
+      category: webhook
+      cwe: CWE-798
+    patterns:
+      - pattern-regex: 'https://[a-z0-9.]*webhook\.office\.com/webhookb2/[\w@\-/]+'
+
+  - id: hardcoded-generic-webhook-with-token
+    languages: [generic]
+    severity: WARNING
+    message: Hardcoded webhook/hook URL with an embedded token-like path. Verify it is not a secret.
+    metadata:
+      category: webhook
+    patterns:
+      - pattern-regex: 'https?://[^\s"'']+/(?:webhook|hooks?)/[A-Za-z0-9]{16,}'
+
+  # ─────────────────────────── Misconfigurations
+
+  - id: debug-mode-enabled
+    languages: [python, javascript, typescript]
+    severity: ERROR
+    message: Debug mode enabled — leaks stack traces / enables code exec. Disable in production.
+    metadata:
+      category: misconfig
+      cwe: CWE-489
+      owasp: A05
+    pattern-either:
+      - pattern-regex: '(?i)app\.run\([^)]*debug\s*=\s*True'
+      - pattern-regex: '(?i)FLASK_DEBUG\s*=\s*1'
+      - pattern-regex: '(?i)DEBUG\s*=\s*True'
+
+  - id: permissive-cors-wildcard
+    languages: [generic]
+    severity: ERROR
+    message: CORS allows any origin (*). Use an explicit allow-list, especially with credentials.
+    metadata:
+      category: misconfig
+      owasp: A05
+      cwe: CWE-942
+    patterns:
+      - pattern-regex: '(?i)access-control-allow-origin["''\s:]+\*'
+
+  - id: tls-verification-disabled
+    languages: [generic]
+    severity: ERROR
+    message: TLS certificate verification disabled — enables MITM. Enable verification.
+    metadata:
+      category: misconfig
+      owasp: A02
+      cwe: CWE-295
+    pattern-either:
+      - pattern-regex: '(?i)verify\s*=\s*False'
+      - pattern-regex: '(?i)NODE_TLS_REJECT_UNAUTHORIZED\s*=\s*["'']?0'
+      - pattern-regex: '(?i)rejectUnauthorized\s*:\s*false'
+
+  - id: insecure-cookie-flags
+    languages: [javascript, typescript]
+    severity: ERROR
+    message: Cookie set without httpOnly+secure+sameSite. Set all three for auth/session cookies.
+    metadata:
+      category: misconfig
+      owasp: A05
+      cwe: CWE-614
+    patterns:
+      - pattern-regex: 'res\.cookie\([^)]*\)'
+      - pattern-not-regex: 'httpOnly[\s\S]{0,120}secure[\s\S]{0,120}sameSite'
+
+  - id: default-credentials
+    languages: [generic]
+    severity: ERROR
+    message: Default/weak credentials detected. Remove and require configured secrets.
+    metadata:
+      category: misconfig
+      cwe: CWE-1392
+    patterns:
+      - pattern-regex: '(?i)\b(?:admin|root)\s*[:=]\s*["'']?(?:admin|root|password|changeme|123456)\b'

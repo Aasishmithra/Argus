@@ -1,0 +1,628 @@
+# =============================================================================
+# multi_sast custom rulepack.
+#
+# This file is auto-loaded by semgrep + opengrep when it sits next to
+# multi_sast.py. Its purpose is to cover the classes the vendor rulepacks
+# (p/default, p/security-audit, p/secrets) do NOT express well — the semantic /
+# cross-boundary patterns a manual code review turns up: HTTP-header-as-
+# identity, non-constant-time secret compare, Kafka JSON straight to DB, Jinja2
+# prompt-injection sinks, callback-URL concatenation, requests without a
+# timeout, ReDoS from a user-supplied pattern, sensitive-data-in-log, eval on
+# a dynamic string.
+#
+# Every rule is scoped by a metavariable-regex on the variable name so it fires
+# only on names that suggest the relevant category — this keeps the false-
+# positive rate low while still catching the real hits.
+# =============================================================================
+
+rules:
+
+# -----------------------------------------------------------------------------
+# 1) Authentication / identity — untrusted header treated as caller identity
+# -----------------------------------------------------------------------------
+- id: mhealth.python.auth.header-as-identity
+  languages: [python]
+  severity: ERROR
+  message: >
+    Untrusted HTTP header ($HDR) is being read as the caller's identity.
+    Any client can send this header, so unless an upstream proxy strips it and
+    re-adds a trusted value, the value is attacker-controlled. Use a signed
+    token (JWT / session) or a proxy-authenticated header verified at the
+    gateway.
+  metadata:
+    cwe: "CWE-290"
+    owasp: "A07:2021 Identification and Authentication Failures"
+    category: security
+  pattern-either:
+    - pattern: $REQ.headers.get($HDR, ...)
+    - pattern: $REQ.headers[$HDR]
+  metavariable-regex:
+    metavariable: $HDR
+    regex: (?i)["']x-(auth|user|remote|forwarded|real)-?(user|id|email|name)["']
+
+# -----------------------------------------------------------------------------
+# 2) Authentication — non-constant-time comparison of secret material
+# -----------------------------------------------------------------------------
+- id: mhealth.python.auth.non-constant-time-compare
+  languages: [python]
+  severity: WARNING
+  message: >
+    '$A' is compared with '==', which short-circuits on the first differing
+    byte and leaks length via a timing side-channel. Use hmac.compare_digest()
+    for tokens, HMACs, API keys and password hashes.
+  metadata:
+    cwe: "CWE-208"
+    owasp: "A02:2021 Cryptographic Failures"
+    category: security
+  patterns:
+    - pattern-either:
+        - pattern: $A == $B
+        - pattern: $A != $B
+    - metavariable-regex:
+        metavariable: $A
+        regex: (?i).*(token|secret|password|passwd|api_?key|hmac|signature|nonce|otp).*
+    - pattern-not-inside: |
+        hmac.compare_digest(...)
+
+# -----------------------------------------------------------------------------
+# 3) Kafka / queue — JSON message deserialized straight into business logic
+# -----------------------------------------------------------------------------
+# Scoped to files under kafka/ or consumer/ subtrees to avoid firing on the
+# many legitimate json.loads() calls elsewhere in the codebase.
+- id: mhealth.python.kafka.unvalidated-json-message
+  languages: [python]
+  severity: WARNING
+  message: >
+    A Kafka / queue message is being deserialized with json.loads() and used
+    directly. Anyone with topic write access injects the shape they want.
+    Validate with a Pydantic model (or equivalent) before touching a DB row
+    or forwarding to an LLM call.
+  metadata:
+    cwe: "CWE-20"
+    category: security
+  paths:
+    include:
+      - "**/kafka/**"
+      - "**/consumer/**"
+      - "**/consumers/**"
+      - "**/*consumer*.py"
+      - "**/*_consumer.py"
+  pattern-either:
+    # Direct .value / .value() on a message record
+    - pattern: json.loads($MSG.value)
+    - pattern: json.loads($MSG.value())
+    # Any .get(...) — matches "payload", "ai_request", "db_model_requests",
+    # etc., which is what the real consumers in the wild look like.
+    - pattern: json.loads($EVENT.get(...))
+    # Some codebases pass the raw byte payload as the sole positional arg;
+    # keep those covered too when the variable name suggests a message.
+    - patterns:
+        - pattern: json.loads($X)
+        - metavariable-regex:
+            metavariable: $X
+            regex: (?i).*(message|msg|event|payload|record|body|value).*
+
+# -----------------------------------------------------------------------------
+# 4) LLM — Jinja2 template rendered without a SandboxedEnvironment (SSTI +
+#          prompt-injection primitive when the render context comes from user
+#          input).
+# -----------------------------------------------------------------------------
+# Absent SandboxedEnvironment, template control-flow (`{% ... %}`, attribute
+# access) executes in the Jinja evaluator, so a user-controlled variable or
+# template source becomes an SSTI vector. Also catches the `render(**params)`
+# LLM-prompt-injection shape where user data is spread into the render call.
+- id: mhealth.python.llm.prompt-injection-jinja-render
+  languages: [python]
+  severity: ERROR
+  message: >
+    Jinja2 render call made without a SandboxedEnvironment in scope. If the
+    template source or any render variable comes from a caller, this is both
+    an SSTI vector (OWASP LLM04 / CWE-94) and a prompt-injection primitive
+    when the output feeds an LLM prompt. Use jinja2.sandbox.SandboxedEnvironment,
+    reject caller-supplied template source, and enumerate the allowed render
+    variables explicitly.
+  metadata:
+    cwe: "CWE-94"
+    owasp: "LLM04"
+    category: llm-security
+  patterns:
+    - pattern-either:
+        # User-params-spread shape (LLM prompt-injection primitive)
+        - pattern: $ENV.from_string($TPL).render(**$PARAMS)
+        - pattern: Template($TPL).render(**$PARAMS)
+        - pattern: $ENV.get_template($NAME).render(**$PARAMS)
+        # SSTI shapes — any unsandboxed render
+        - pattern: jinja2.Template(...).render(...)
+        - pattern: Environment(...).from_string(...).render(...)
+    # Safety-valve: don't fire when a SandboxedEnvironment is present in the
+    # enclosing scope. Any file that constructs one is presumed to be using it
+    # for the render pipeline.
+    - pattern-not-inside: |
+        SandboxedEnvironment(...)
+
+# -----------------------------------------------------------------------------
+# 5) SSRF — callback URL built by concatenating a base and a user-controlled
+#           path segment, then requested
+# -----------------------------------------------------------------------------
+- id: mhealth.python.ssrf.callback-url-concat
+  languages: [python]
+  severity: WARNING
+  message: >
+    An HTTP callback URL is being built by string-concatenating a base host
+    and a caller-controlled path. Even if the host is allow-listed, the path
+    portion can carry '?', '#', '../' or '@host' payloads that steer the
+    request. Parse the base, then use urljoin with a path validator, or
+    reject any suspicious characters.
+  metadata:
+    cwe: "CWE-918"
+    category: security
+  pattern-either:
+    - pattern: requests.request($METHOD, $A + $B, ...)
+    - pattern: requests.$METHOD($A + $B, ...)
+    - pattern: httpx.request($METHOD, $A + $B, ...)
+    - pattern: httpx.$METHOD($A + $B, ...)
+
+# -----------------------------------------------------------------------------
+# 6) HTTP — requests without a timeout (DoS via slow-loris upstream)
+# -----------------------------------------------------------------------------
+- id: mhealth.python.http.requests-no-timeout
+  languages: [python]
+  severity: WARNING
+  message: >
+    A requests / httpx call was made with no `timeout=` argument. A slow or
+    unresponsive upstream can hang the worker forever and drain the pool.
+    Always pass a positive timeout (both connect + read where the library
+    supports it).
+  metadata:
+    cwe: "CWE-400"
+    category: security
+  pattern-either:
+    - pattern: requests.get($URL)
+    - pattern: requests.post($URL)
+    - pattern: requests.put($URL)
+    - pattern: requests.patch($URL)
+    - pattern: requests.delete($URL)
+    - pattern: requests.request($METHOD, $URL)
+    - pattern: requests.get($URL, stream=$S)
+    - pattern: requests.post($URL, json=$J)
+    - pattern: requests.post($URL, data=$D)
+  pattern-not-inside: |
+    requests.$M(..., timeout=..., ...)
+
+# -----------------------------------------------------------------------------
+# 7) ReDoS — regex compiled/searched with a user-controlled pattern
+# -----------------------------------------------------------------------------
+- id: mhealth.python.redos.user-controlled-pattern
+  languages: [python]
+  severity: WARNING
+  message: >
+    A regex is being compiled / searched from a variable whose name suggests
+    it is caller-supplied. A crafted pattern can trigger catastrophic
+    backtracking and hang the process. Enforce a strict length + complexity
+    budget, or run the match under a timeout / subprocess.
+  metadata:
+    cwe: "CWE-1333"
+    owasp: "A05:2021 Security Misconfiguration"
+    category: security
+  patterns:
+    - pattern-either:
+        - pattern: re.compile($PAT, ...)
+        - pattern: re.compile($PAT)
+        - pattern: re.search($PAT, ...)
+        - pattern: re.match($PAT, ...)
+        - pattern: re.fullmatch($PAT, ...)
+        - pattern: re.findall($PAT, ...)
+    - metavariable-regex:
+        metavariable: $PAT
+        regex: (?i).*(pattern|regex|rule|expr|user_.*|payload).*
+
+# -----------------------------------------------------------------------------
+# 8) Sensitive-data-in-log — variable name suggests secret material
+# -----------------------------------------------------------------------------
+- id: mhealth.python.log.sensitive-data
+  languages: [python]
+  severity: ERROR
+  message: >
+    A logging call references '$EXPR' — a name that suggests one of:
+    (a) secret material (api_key / password / secret / token / authorization /
+    bearer / credentials / access_key / private_key),
+    (b) PHI/PII (diagnosis_code / member_age / consultation_data / patient /
+    payload / phi), or
+    (c) LLM prompt/response content (prompt / messages / response_text /
+    model_output / completion).
+    Logs get shipped, mirrored and indexed — never emit any of these fields
+    even at debug level. Redact / hash / omit at the call site.
+  metadata:
+    cwe: "CWE-532"
+    owasp: "A09:2021 Security Logging and Monitoring Failures"
+    category: security
+  patterns:
+    - pattern-either:
+        - pattern: $LOG.$LEVEL($EXPR)
+        - pattern: $LOG.$LEVEL($MSG, $EXPR)
+        - pattern: $LOG.$LEVEL($MSG, $EXPR, ...)
+        - pattern: $LOG.$LEVEL(f"...{$EXPR}...")
+        - pattern: $LOG.$LEVEL("...", $EXPR)
+        - pattern: $LOG.$LEVEL("...%s...", $EXPR)
+    - metavariable-regex:
+        metavariable: $LEVEL
+        regex: ^(debug|info|warning|warn|error|critical|exception|log)$
+    - metavariable-regex:
+        metavariable: $EXPR
+        # (a) secrets: api_key/password/secret/token/authorization/bearer/credentials/access_key/private_key
+        # (b) PHI/PII: diagnosis_code/member_age/consultation_data/patient/payload/phi
+        # (c) LLM I/O: prompt/messages/response_text/model_output/completion
+        regex: (?i).*(api_?keys?|password|passwd|secret|token|authoriz|credential|bearer|access_key|private_?key|diagnosis_code|member_age|consultation_data|patient|payload|phi|prompt|messages|response_text|model_output|completion).*
+
+# -----------------------------------------------------------------------------
+# 9) eval / exec on a dynamic string
+# -----------------------------------------------------------------------------
+- id: mhealth.python.eval.dynamic-string
+  languages: [python]
+  severity: ERROR
+  message: >
+    eval() / exec() called on a value whose name suggests it is not a compile-
+    time literal — arbitrary-code-execution primitive if any part is caller-
+    controlled. Prefer ast.literal_eval for data, or a purpose-built parser
+    for expressions.
+  metadata:
+    cwe: "CWE-95"
+    owasp: "A03:2021 Injection"
+    category: security
+  patterns:
+    - pattern-either:
+        - pattern: eval($X, ...)
+        - pattern: exec($X, ...)
+    - metavariable-regex:
+        metavariable: $X
+        regex: (?i).*(user|input|payload|body|data|expression|query|request|param).*
+
+# -----------------------------------------------------------------------------
+# 10) SSRF — outbound HTTP fetch against a variable whose name signals it
+#            originated from user input, with no is_allowlisted guard
+# -----------------------------------------------------------------------------
+# Widened from the earlier image-URL-only variant to include httpx, urllib,
+# and any variable named *_url / *_handler that suggests the value flowed in
+# from a request payload. Also honours an `is_allowlisted($URL)` sanitizer if
+# the codebase gates the fetch behind one — no fire when the guard is present.
+- id: mhealth.python.llm.suspicious-url-fetch-no-allowlist
+  languages: [python]
+  severity: WARNING
+  message: >
+    An HTTP request is made against a URL whose variable name suggests it
+    originated from user input (image_url / callback_url / callback_handler /
+    remote_url / webhook_url / src_url / content_url / attachment_url).
+    Fetching caller-controlled URLs enables SSRF to internal services or
+    cloud-metadata endpoints (169.254.169.254 / metadata.google.internal).
+    Resolve the DNS, deny private ranges (127/8, 10/8, 169.254/16, 172.16/12,
+    192.168/16, ::1, fc00::/7), or route through an `is_allowlisted()`
+    gateway that does.
+  metadata:
+    cwe: "CWE-918"
+    owasp: "LLM06"
+    category: llm-security
+  patterns:
+    - pattern-either:
+        - pattern: requests.$M($URL, ...)
+        - pattern: httpx.$M($URL, ...)
+        - pattern: urllib.request.urlopen($URL, ...)
+    - metavariable-regex:
+        metavariable: $URL
+        regex: (?i).*(image_?url|img_?url|src_?url|content_?url|attachment_?url|user_?url|remote_?url|callback_?url|callback_?handler|webhook_?url).*
+    - pattern-not-inside: |
+        if is_allowlisted($URL):
+            ...
+
+# -----------------------------------------------------------------------------
+# 11) LLM cost / prompt-injection payload — unbounded str field in a Pydantic
+#     model whose name suggests LLM input
+# -----------------------------------------------------------------------------
+- id: mhealth.python.pydantic.unbounded-llm-str-field
+  languages: [python]
+  severity: WARNING
+  message: >
+    Pydantic string field named like an LLM input (prompt / user_message /
+    system_message / params / query / instruction / context) with no
+    max_length constraint. That's a DoS + LLM-cost amplifier + prompt-
+    injection payload vector. Add max_length or constr(max_length=...) to
+    cap the size at the API boundary.
+  metadata:
+    cwe: "CWE-400"
+    category: llm-security
+  patterns:
+    - pattern-either:
+        - pattern: |
+            $FIELD: str
+        - pattern: |
+            $FIELD: str = ...
+        - pattern: |
+            $FIELD: Optional[str]
+        - pattern: |
+            $FIELD: Optional[str] = ...
+    - metavariable-regex:
+        metavariable: $FIELD
+        regex: (?i)^(prompt|user_message|system_message|params|query|instruction|context|content|input|text|body|payload|message)$
+  paths:
+    include:
+      - "**/schema/**"
+      - "**/schemas/**"
+      - "**/models/**"
+      - "**/dto/**"
+
+# -----------------------------------------------------------------------------
+# 12) FastAPI — path operation with no response_model= arg
+# -----------------------------------------------------------------------------
+# When response_model is absent the ORM object serialises directly, so any
+# internal-only column (soft-delete flags, hashed_password, api_key, PII) can
+# leak in the JSON body. Fires only on non-trivial return-type-ambiguous
+# handlers to keep the FP rate low.
+- id: mhealth.python.fastapi.route-missing-response-model
+  languages: [python]
+  severity: INFO
+  message: >
+    FastAPI route decorator has no `response_model=` argument. Without one,
+    the raw return value is serialised, and any internal-only column of the
+    ORM/dict returned leaks in the JSON body. Declare a Pydantic response
+    schema and pass it as `response_model=`.
+  metadata:
+    cwe: "CWE-213"
+    category: security
+  pattern-either:
+    - pattern: |
+        @$ROUTER.get($PATH)
+        def $FUNC(...): ...
+    - pattern: |
+        @$ROUTER.post($PATH)
+        def $FUNC(...): ...
+    - pattern: |
+        @$ROUTER.put($PATH)
+        def $FUNC(...): ...
+    - pattern: |
+        @$ROUTER.patch($PATH)
+        def $FUNC(...): ...
+    - pattern: |
+        @$ROUTER.delete($PATH)
+        def $FUNC(...): ...
+
+# -----------------------------------------------------------------------------
+# 13) SSRF — outbound HTTP with a URL built by string concat (broadest form)
+# -----------------------------------------------------------------------------
+- id: mhealth.python.ssrf.string-concat-url-fetch
+  languages: [python]
+  severity: WARNING
+  message: >
+    HTTP request URL is built by string concatenation immediately at the
+    call site. If either half is user-controlled (path from a callback body,
+    hostname from config, tenant slug from a JWT claim), the resulting URL
+    can be steered to unintended hosts or paths. Parse the base with
+    urllib.parse.urljoin and validate the path with a strict allowlist.
+  metadata:
+    cwe: "CWE-918"
+    category: security
+  pattern-either:
+    - pattern: requests.get($A + $B, ...)
+    - pattern: requests.post($A + $B, ...)
+    - pattern: requests.put($A + $B, ...)
+    - pattern: requests.patch($A + $B, ...)
+    - pattern: requests.delete($A + $B, ...)
+    - pattern: requests.request($M, $A + $B, ...)
+    - pattern: httpx.get($A + $B, ...)
+    - pattern: httpx.post($A + $B, ...)
+    - pattern: httpx.request($M, $A + $B, ...)
+    - pattern: requests.get(f"{$A}{$B}", ...)
+    - pattern: requests.post(f"{$A}{$B}", ...)
+
+# -----------------------------------------------------------------------------
+# 14) Java — JAX-RS handler with no @RolesAllowed / @PreAuthorize / @DenyAll
+# -----------------------------------------------------------------------------
+- id: mhealth.java.jaxrs.handler-missing-authz-annotation
+  languages: [java]
+  severity: WARNING
+  message: >
+    JAX-RS mutating HTTP handler (POST/PUT/DELETE/PATCH) with no method-
+    level authz annotation (@RolesAllowed, @PreAuthorize, @Secured,
+    @PermitAll) AND no class-level authz annotation (@RolesAllowed,
+    @UserTokenRequired, @AppTokenRequired, @PermitAll). Anything checked
+    only by custom name-bound filters (@NameBinding) is a silent no-op if
+    the corresponding ContainerRequestFilter is not registered — so an
+    explicit annotation must be present.
+  metadata:
+    cwe: "CWE-862"
+    owasp: "A01:2021 Broken Access Control"
+    category: security
+  patterns:
+    # Fire on any mutating handler method
+    - pattern-either:
+        - pattern: |
+            @POST
+            public $T $M(...) { ... }
+        - pattern: |
+            @PUT
+            public $T $M(...) { ... }
+        - pattern: |
+            @DELETE
+            public $T $M(...) { ... }
+        - pattern: |
+            @PATCH
+            public $T $M(...) { ... }
+    # ...but exempt if the METHOD is decorated with a real authz annotation
+    - pattern-not: |
+        @RolesAllowed(...)
+        @POST
+        public $T $M(...) { ... }
+    - pattern-not: |
+        @RolesAllowed(...)
+        @PUT
+        public $T $M(...) { ... }
+    - pattern-not: |
+        @RolesAllowed(...)
+        @DELETE
+        public $T $M(...) { ... }
+    - pattern-not: |
+        @RolesAllowed(...)
+        @PATCH
+        public $T $M(...) { ... }
+    - pattern-not: |
+        @PreAuthorize(...)
+        @POST
+        public $T $M(...) { ... }
+    - pattern-not: |
+        @PreAuthorize(...)
+        @PUT
+        public $T $M(...) { ... }
+    - pattern-not: |
+        @Secured(...)
+        @POST
+        public $T $M(...) { ... }
+    - pattern-not: |
+        @PermitAll
+        @POST
+        public $T $M(...) { ... }
+    # ...or if the enclosing CLASS carries a PER-USER auth annotation. Note
+    # that @AppTokenRequired is intentionally NOT in this list: it authenticates
+    # the *service* making the call, not the end user, so a mutating handler
+    # under class-level @AppTokenRequired-only still lacks the user-scope check
+    # required for authorization. The halodoc convention is @UserTokenRequired
+    # (or a JAX-RS / Spring standard @RolesAllowed / @PreAuthorize / @Secured).
+    - pattern-not-inside: |
+        @UserTokenRequired
+        public class $C { ... }
+    - pattern-not-inside: |
+        @RolesAllowed(...)
+        public class $C { ... }
+    - pattern-not-inside: |
+        @PreAuthorize(...)
+        public class $C { ... }
+    - pattern-not-inside: |
+        @Secured(...)
+        public class $C { ... }
+
+# -----------------------------------------------------------------------------
+# 15) Java — JDBC URL with useSSL=false in a config file
+# -----------------------------------------------------------------------------
+- id: mhealth.java.jdbc.useSSL-false
+  languages: [java, yaml]
+  severity: ERROR
+  message: >
+    JDBC URL declares useSSL=false — DB traffic goes over cleartext even
+    when the DB server supports TLS. In production this is a hard finding
+    (auth handshake and every subsequent query is on the wire in plain).
+    Set useSSL=true and provide a trust store; if the DB truly does not
+    support TLS, route it through a private link and note the exception.
+  metadata:
+    cwe: "CWE-319"
+    owasp: "A02:2021 Cryptographic Failures"
+    category: security
+  pattern-either:
+    - pattern-regex: (?i)jdbc:mysql://[^\s"']+useSSL=false
+    - pattern-regex: (?i)jdbc:postgresql://[^\s"']+ssl=false
+
+# -----------------------------------------------------------------------------
+# 16) Java — Jackson enableDefaultTyping / activateDefaultTyping (deser RCE)
+# -----------------------------------------------------------------------------
+- id: mhealth.java.jackson.default-typing-enabled
+  languages: [java]
+  severity: ERROR
+  message: >
+    Jackson ObjectMapper.enableDefaultTyping() / activateDefaultTyping()
+    turns on polymorphic deserialization for arbitrary types — a classic
+    RCE primitive (CVE-2017-15095 and its whole family). Use
+    @JsonTypeInfo on the specific model that needs polymorphism, or add a
+    PolymorphicTypeValidator that whitelists known-safe base types.
+  metadata:
+    cwe: "CWE-502"
+    owasp: "A08:2021 Software and Data Integrity Failures"
+    category: security
+  pattern-either:
+    - pattern: $MAPPER.enableDefaultTyping(...)
+    - pattern: $MAPPER.activateDefaultTyping(...)
+
+# -----------------------------------------------------------------------------
+# 17) Go — crypto/tls with InsecureSkipVerify: true
+# -----------------------------------------------------------------------------
+- id: mhealth.go.tls.insecure-skip-verify
+  languages: [go]
+  severity: ERROR
+  message: >
+    tls.Config sets InsecureSkipVerify: true. That disables server-cert
+    validation entirely — any TLS interception (proxy, coffee-shop wifi,
+    compromised routing) can MITM the connection. This must never ship to
+    production. If a self-signed cert is genuinely needed, pin its
+    fingerprint via VerifyPeerCertificate instead of skipping validation.
+  metadata:
+    cwe: "CWE-295"
+    owasp: "A02:2021 Cryptographic Failures"
+    category: security
+  pattern-either:
+    - pattern: "InsecureSkipVerify: true"
+    - pattern: |
+        &tls.Config{..., InsecureSkipVerify: true, ...}
+    - pattern: |
+        tls.Config{..., InsecureSkipVerify: true, ...}
+
+# -----------------------------------------------------------------------------
+# 18) Go — os.MkdirAll with world-writable permissions
+# -----------------------------------------------------------------------------
+- id: mhealth.go.file.world-writable-mkdir
+  languages: [go]
+  severity: WARNING
+  message: >
+    Directory created with 0777 / ModePerm / 0o755 permissions. In multi-
+    tenant hosts (containers with shared volumes, CI runners) that permits
+    other processes to write into the tree — race conditions, symlink
+    attacks. Use 0700 for private dirs, 0750 only when a specific group
+    needs access.
+  metadata:
+    cwe: "CWE-732"
+    category: security
+  pattern-either:
+    - pattern: os.MkdirAll($PATH, 0777)
+    - pattern: os.MkdirAll($PATH, os.ModePerm)
+    - pattern: os.Mkdir($PATH, 0777)
+    - pattern: os.Mkdir($PATH, os.ModePerm)
+
+# -----------------------------------------------------------------------------
+# 19) Go — HTTP request without a timeout
+# -----------------------------------------------------------------------------
+- id: mhealth.go.http.no-timeout
+  languages: [go]
+  severity: WARNING
+  message: >
+    http.Client{} with no Timeout field, or http.DefaultClient / http.Get /
+    http.Post used directly — a slow upstream can hang the goroutine
+    forever and drain the worker pool. Always set client.Timeout to a
+    positive duration.
+  metadata:
+    cwe: "CWE-400"
+    category: security
+  pattern-either:
+    - pattern: http.Get($URL)
+    - pattern: http.Post($URL, ...)
+    - pattern: http.PostForm($URL, ...)
+    - pattern: http.DefaultClient.$M(...)
+
+# -----------------------------------------------------------------------------
+# 20) Python — FastAPI app with no CORS / TrustedHost middleware
+# -----------------------------------------------------------------------------
+# Fires once per FastAPI() constructor call; a follow-up check that a
+# middleware IS registered is best done with pattern-not-anywhere, which
+# semgrep supports at file scope via pattern-inside on the file.
+- id: mhealth.python.fastapi.app-missing-cors-middleware
+  languages: [python]
+  severity: INFO
+  message: >
+    FastAPI() app instance created without any add_middleware() call in
+    the same file. If deployed without an upstream ingress that enforces
+    CORS + TrustedHost + rate limiting, the app is defenseless at those
+    layers. Confirm the ingress covers this, or add CORSMiddleware and
+    TrustedHostMiddleware at startup.
+  metadata:
+    cwe: "CWE-346"
+    category: security
+  patterns:
+    - pattern: |
+        $APP = FastAPI(...)
+    - pattern-not-inside: |
+        $APP = FastAPI(...)
+        ...
+        $APP.add_middleware(...)

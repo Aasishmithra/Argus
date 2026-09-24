@@ -1,0 +1,792 @@
+================================================================================
+              ARGUS — VULNERABILITY & MISCONFIGURATION COVERAGE
+             Complete catalog of what the tool detects, by OWASP
+================================================================================
+
+Tool     : ARGUS v1.0.0 — Multi-scanner SAST orchestrator
+Engines  : semgrep · opengrep · bandit · bearer · gosec · drogonsec
+Rule     : 137 Halodoc-custom + 104 imported + ~2,000 Semgrep Registry (per repo)
+Coverage : OWASP Web Top 10 · OWASP LLM Top 10 · CWE Top 25 · Secrets · IaC · SCA-adjacent
+
+================================================================================
+  RULE PACK SOURCES (referenced throughout this document)
+================================================================================
+
+  [core]              — Halodoc-authored, bundled with argus.py
+                        - sast_rulepack.yml          (20 rules)
+                        - sphere_llm_semgrep.yml     (4 rules)
+                        - sast_webhook_misconfig.yml (9 rules)
+                        - idor.semgrep.yml           (3 rules)
+  [rules/]            — imported semgrep-master pack (104 rules)
+  [p/*]               — Semgrep Registry vendor packs (auto-loaded)
+  [bandit]            — Python-native scanner (43+ B-rules)
+  [bearer]            — Data-flow taint (multi-language)
+  [gosec]             — Go-native scanner (25+ G-rules)
+  [drogonsec]         — Halodoc internal scanner (LEAK-*, PY-*, JAVA-*)
+
+
+================================================================================
+  OWASP TOP 10 · WEB (2021)
+================================================================================
+
+--------------------------------------------------------------------------------
+  A01:2021 · BROKEN ACCESS CONTROL
+--------------------------------------------------------------------------------
+    Insecure Direct Object References (IDOR)
+      * Python/FastAPI handlers fetching resources by user-supplied ID
+        without ownership check                                      [core]
+      * Java JAX-RS handlers using @PathParam → em.find() without authz [core]
+      * Go/Beego controllers with c.Param → service call, no ownership [core]
+      * Halodoc-flavoured: getUserId() ownership-scope pattern recognised
+
+    Missing Authorization Annotations
+      * JAX-RS @RolesAllowed / @PreAuthorize / @Secured absent on
+        mutating handlers                                             [core]
+      * Spring Security missing on route handlers                     [core]
+      * @UserTokenRequired / @AppTokenRequired class-level check      [core]
+
+    Path Traversal
+      * Filepath.Join misuse in Go                                    [rules/]
+      * JAX-RS path traversal                                         [rules/]
+      * Express sendfile path traversal                               [rules/]
+      * ../ sequences reaching file open (Python/Java/Go/Node)        [multiple]
+
+    HTTP-Header Trusted as Identity
+      * X-AUTH-USER, X-Forwarded-User, X-Remote-User, X-Real-Email    [core]
+
+    CORS Misconfiguration (permissive-with-credentials)               [core]
+
+    Missing rate-limiting on state-changing endpoints                 [manual]
+
+    Directory listing / force-browsing patterns                       [rules/]
+
+--------------------------------------------------------------------------------
+  A02:2021 · CRYPTOGRAPHIC FAILURES
+--------------------------------------------------------------------------------
+    Weak Hash Algorithms Used for Security
+      * MD5                                     [bandit B303, rules/]
+      * SHA1                                    [bandit B303, semgrep]
+
+    Insecure Ciphers
+      * DES / 3DES                              [bandit B304, semgrep]
+      * RC4                                     [rules/swift/insecure-crypto-algorithm-rc4]
+      * ECB mode                                [rules/swift/, semgrep]
+      * Blowfish (hardcoded secret)             [rules/swift/blowfish-hardcoded-secret]
+      * ChaCha20 (hardcoded secret)             [rules/swift/chacha20-hardcoded-secret]
+
+    Weak RSA Key Size
+      * < 2048 bits                             [rules/swift/insecure-crypto-rsa-keysize]
+
+    Hardcoded IV / Nonce
+      * AES / ChaCha20 / scrypt / Blowfish IV   [rules/swift/hardcoded-iv]
+
+    Hardcoded Cryptographic Keys
+      * AES hardcoded secret                    [rules/swift/aes-hardcoded-secret]
+      * scrypt hardcoded secret                 [rules/swift/scrypt-hardcoded-secret]
+
+    Non-Constant-Time Secret Compare
+      * token == user_input (Python/Java/Go)    [core]
+      * strings.Compare on shared secrets       [core]
+
+    Insecure TLS
+      * verify=False (Python requests/httpx)    [core, bandit B501]
+      * InsecureSkipVerify=true (Go)            [core, rules/go_tls_insecureskipverify_true]
+      * NODE_TLS_REJECT_UNAUTHORIZED=0 (Node)   [core]
+      * rejectUnauthorized: false (Node)        [core]
+      * SSLv2 / SSLv3 / TLS 1.0 usage           [rules/insecure-tls-validation]
+      * p/insecure-transport pack (53 rules)    [p/insecure-transport]
+
+    Weak PRNG Used for Security
+      * math/rand.Intn for tokens/IDs (Go)      [gosec G404, rules/math_random]
+      * random.random() for tokens (Python)     [bandit B311]
+
+    Cleartext DB / OAuth in Production
+      * JDBC useSSL=false                       [core]
+      * postgres://password@... in config       [gitleaks]
+
+
+--------------------------------------------------------------------------------
+  A03:2021 · INJECTION
+--------------------------------------------------------------------------------
+    SQL Injection
+      * String concat / f-string in text() / execute()               [bandit B608]
+      * SQLAlchemy raw text() usage                                  [opengrep, semgrep]
+      * JPA createNativeQuery with concatenation                     [bearer]
+      * Taint-mode: Python                                           [rules/sql-injection-taint-py]
+      * Taint-mode: Go                                               [rules/sql-injection-taint-go]
+      * Taint-mode: Java                                             [rules/sql-injection-taint-java]
+      * Taint-mode: Ruby / PHP / Swift                               [rules/]
+      * gosec sql-injection audit                                    [rules/gosql-sqli]
+      * PHP concat in query                                          [rules/php_sql_concat_in_query]
+      * Kotlin SQL injection potential                               [rules/kotlin-sql-injection-potential]
+      * p/sql-injection pack (47 rules)                              [p/sql-injection]
+
+    OS Command Injection
+      * subprocess.run(shell=True)                                   [bandit B602, B605]
+      * os/exec.Command with user input                              [rules/command-injection]
+      * child_process shell injection (Node)                         [rules/child_process_shell_injection]
+      * Runtime.exec / ProcessBuilder (Java)                         [semgrep]
+      * Python subprocess-shell-user-input                           [rules/python_subprocess_shell_user_input]
+      * Kotlin command injection                                     [rules/kotlin-command-injection-detection]
+      * p/command-injection pack (31 rules)                          [p/command-injection]
+
+    Code Injection
+      * eval() / exec() on dynamic strings                           [bandit B307/B102, core]
+      * Function() on user data (Node)                               [semgrep]
+      * PHP eval / create_function                                   [rules/php_eval_create_function]
+      * p/code-execution pack                                        [rules/Code_Execution/]
+
+    Server-Side Template Injection (SSTI)
+      * Jinja2 Environment().from_string(...).render(**params)       [core, sphere_llm_semgrep]
+      * Unsandboxed jinja2.Template().render                         [core]
+
+    LDAP Injection
+      * User input into LDAP filter                                  [drogonsec JAVA-010]
+
+    XPath Injection
+      * User input into XPath expression                             [semgrep]
+
+    Header / CRLF Injection
+      * User input in HTTP response headers                          [bearer]
+
+    Expression Language Injection
+      * Spring SpEL with user data                                   [semgrep]
+
+    XML External Entity (XXE)
+      * DocumentBuilderFactory / SAXParserFactory defaults           [rules/XXE]
+      * External-entities enabled                                    [rules/parsing-external-entities-enabled]
+
+
+--------------------------------------------------------------------------------
+  A04:2021 · INSECURE DESIGN
+--------------------------------------------------------------------------------
+    Missing security controls
+      * No auth middleware on route                                  [manual audit + rules/]
+      * No CSRF token strategy                                       [semgrep]
+      * No rate limit / throttle                                     [manual audit]
+
+    Business logic flaws
+      * Caller-supplied system_prompt without validation             [sphere_llm_semgrep]
+      * Arbitrary distributor_name in webhook path                   [manual]
+      * Body-parse-before-auth (Beego copyrequestbody=true)          [manual]
+
+
+--------------------------------------------------------------------------------
+  A05:2021 · SECURITY MISCONFIGURATION
+--------------------------------------------------------------------------------
+    Debug Mode Enabled in Production
+      * app.run(debug=True) / FLASK_DEBUG=1 / DEBUG=True             [core, rules/python_flask_debug_true]
+      * NODE_ENV != production in prod                               [core]
+
+    Permissive CORS Wildcard
+      * Access-Control-Allow-Origin: *                               [core]
+      * CORS with credentials + wildcard                             [core]
+
+    Missing Security Headers
+      * No Content-Security-Policy                                   [semgrep]
+      * No X-Frame-Options / HSTS                                    [semgrep]
+      * Missing helmet() in Express                                  [semgrep]
+
+    Missing CSRF Protection
+      * No CSRF token on cookie-authenticated endpoints              [semgrep]
+
+    Insecure Cookie Flags
+      * res.cookie() missing httpOnly + secure + sameSite            [core]
+      * Servlet cookie isSecure=false                                [rules/cookie-issecure-false]
+
+    Dockerfile Misconfiguration
+      * Runs as root (no USER directive)                             [core, rules/dockerfile]
+      * :latest mutable tag / no digest pin                          [core, p/dockerfile]
+      * ADD http:// (remote fetch)                                   [p/dockerfile]
+      * Secrets in ENV                                               [p/dockerfile]
+
+    Kubernetes Misconfiguration
+      * Privileged containers                                        [p/kubernetes]
+      * hostNetwork: true                                            [p/kubernetes]
+      * hostPath mounts                                              [p/kubernetes]
+
+    Terraform / IaC Misconfiguration
+      * S3 unencrypted                                               [rules/terraform-s3-unencrypted]
+      * Public S3 buckets                                            [rules/public-s3-bucket]
+      * IAM wildcard policies                                        [rules/iam-wildcard-policy]
+      * Security groups open to 0.0.0.0/0                            [semgrep]
+      * Unencrypted RDS / EBS                                        [p/terraform]
+
+    Default Credentials
+      * admin:admin, root:password, admin:changeme                   [core, rules/default-password]
+
+    Bind-All Listen Without Auth
+      * 0.0.0.0 on management ports                                  [manual]
+      * runmode=dev in prod                                          [manual]
+      * enableadmin=true / enabledocs=true in prod                   [manual]
+      * H2C cleartext HTTP/2 on admin ports                          [manual]
+
+    Framework Configuration
+      * FastAPI missing CORS middleware                              [core]
+      * FastAPI missing response_model= (internal fields leak)       [core]
+      * Jackson enableDefaultTyping (RCE)                            [core]
+
+
+--------------------------------------------------------------------------------
+  A06:2021 · VULNERABLE AND OUTDATED COMPONENTS
+--------------------------------------------------------------------------------
+    NOTE: Full dependency-CVE scanning is SCA scope (osv-scanner / pip-audit
+    / npm-audit / Trivy) — outside ARGUS's SAST core.
+
+    What ARGUS *does* flag:
+      * Hardcoded old library versions in code                       [semgrep]
+      * Hardcoded vulnerable base images (Dockerfile :latest tag)    [p/dockerfile]
+      * Library-misuse patterns (using deprecated APIs)              [rules/]
+
+
+--------------------------------------------------------------------------------
+  A07:2021 · IDENTIFICATION AND AUTHENTICATION FAILURES
+--------------------------------------------------------------------------------
+    JWT Issues
+      * alg=none                                                     [rules/jwt-none-alg]
+      * Decode without verify                                        [rules/jwt-decode-without-verify]
+      * Weak JWT secret                                              [rules/weak-jwt-secret]
+      * Hardcoded JWT                                                [rules/jwt-hardcode]
+      * jsonwebtoken decode without verify (Node)                    [rules/node_jsonwebtoken_decode_without_verify]
+      * Missing algorithm whitelist                                  [semgrep]
+
+    Token Handling
+      * Non-constant-time token compare (X-App-Token, HMAC)          [core]
+      * Trust HTTP header as identity                                [core]
+      * Hardcoded X-App-Token pattern                                [sphere_llm_semgrep]
+
+    Password Issues
+      * Passwords in plain text in code                              [gitleaks]
+      * Hardcoded password constants                                 [bandit B105/B106/B107]
+      * Default credentials                                          [core]
+
+    Session Issues
+      * Session fixation patterns                                    [semgrep]
+      * Insecure session cookies                                     [core]
+
+
+--------------------------------------------------------------------------------
+  A08:2021 · SOFTWARE AND DATA INTEGRITY FAILURES
+--------------------------------------------------------------------------------
+    Insecure Deserialization
+      * Python pickle.loads                                          [bandit B301]
+      * Python tainted pickle (Flask)                                [rules/tainted-pickle-flask]
+      * Python tainted pickle (AWS Lambda)                           [rules/tainted-pickle-deserialization-aws-lambda]
+      * Python yaml.load unsafe                                      [bandit B506, rules/yaml-load-unsafe]
+      * Java ObjectInputStream                                       [rules/insecure-deserialization]
+      * Java Jackson enableDefaultTyping / activateDefaultTyping     [core]
+      * Ruby Marshal.load / YAML.load                                [rules/]
+      * PHP unserialize()                                            [rules/]
+      * Node.js deserialize / unserialize                            [semgrep]
+
+    Software Supply Chain
+      * Unpinned Jenkinsfile shared library                          [manual]
+      * Mutable base image tags                                      [p/dockerfile]
+
+
+--------------------------------------------------------------------------------
+  A09:2021 · SECURITY LOGGING AND MONITORING FAILURES
+--------------------------------------------------------------------------------
+    Secrets in Logs
+      * api_key, password, secret, token, authorization              [core]
+      * bearer, credentials, private_key, access_key                 [core]
+      * Bearer's go_lang_logger_leak                                 [bearer]
+      * Bearer's javascript_lang_logger_leak                         [bearer]
+
+    PII / PHI in Logs
+      * diagnosis_code, member_age, consultation_data                [core]
+      * patient, payload, phi                                        [core]
+
+    LLM Content in Logs
+      * prompt, messages, response_text                              [core]
+      * model_output, completion, chat_completion                    [core]
+
+    Token Logging in CI/CD
+      * Jenkins / GitLab CI pipeline secrets                         [rules/token-logged]
+
+    Log Injection / Missing Output Neutralization
+      * User input concatenated into log format                      [bearer go_lang_log_output_neutralization]
+      * Log4j lookup injection (Log4Shell CVE-2021-44228)            [rules/log4j-message-lookup-injection]
+
+    Silent Exception Handlers
+      * try/except/pass (Python)                                     [bandit B110/B112, core]
+      * try/catch {} silent (Java/Go)                                [semgrep]
+
+
+--------------------------------------------------------------------------------
+  A10:2021 · SERVER-SIDE REQUEST FORGERY (SSRF)
+--------------------------------------------------------------------------------
+    HTTP Client with User-Controlled URL
+      * requests.get(user_url) without allowlist                     [core]
+      * httpx / urllib.urlopen with tainted URL                      [core]
+      * axios / fetch URL from req (Node)                            [rules/axios_fetch_url_from_req]
+
+    Callback URL String Concatenation
+      * requests.post(base + user_path)                              [core]
+
+    LLM-Specific SSRF
+      * image_url from LLM request payload                           [core, sphere_llm_semgrep]
+      * callback_url without allowlist                               [core]
+
+    Tainted URL Host
+      * Go tainted URL host                                          [rules/tainted-url-host]
+
+    Distributor Webhook / Third-Party Fetch
+      * Lazarus / MBS / MAI URL passthrough                          [manual]
+
+    Cloud Metadata Endpoint Reachability
+      * IMDSv1 exposure (chained with SSRF)                          [manual]
+
+
+================================================================================
+  OWASP TOP 10 · LLM APPLICATIONS (2025)
+================================================================================
+
+--------------------------------------------------------------------------------
+  LLM01 · PROMPT INJECTION
+--------------------------------------------------------------------------------
+    * String concat / f-string builds prompt from request input      [sphere_llm_semgrep]
+    * Caller-supplied system_prompt field passed to model            [sphere_llm_semgrep]
+    * Jinja2 render(**params) — SSTI + prompt injection              [core, sphere_llm_semgrep]
+    * User-controlled Jinja template source                          [core]
+
+--------------------------------------------------------------------------------
+  LLM02 · SENSITIVE INFORMATION DISCLOSURE
+--------------------------------------------------------------------------------
+    * PHI / PII in prompt / response logs                            [core]
+    * LLM API keys logged (api_key, openai_key patterns)             [core]
+    * User query content in logs without redaction                   [core]
+
+--------------------------------------------------------------------------------
+  LLM03 · SUPPLY CHAIN
+--------------------------------------------------------------------------------
+    * Hardcoded LLM API tokens (sk-..., hf_..., etc.)                [sphere_llm_semgrep, gitleaks]
+    * Hardcoded Sphere X-App-Token                                   [sphere_llm_semgrep]
+
+--------------------------------------------------------------------------------
+  LLM04 · DATA & MODEL POISONING
+--------------------------------------------------------------------------------
+    * Unsandboxed Jinja2 render (allows arbitrary code)              [core, sphere_llm_semgrep]
+    * User-controllable prompt template loaders                      [semgrep]
+
+--------------------------------------------------------------------------------
+  LLM05 · IMPROPER OUTPUT HANDLING
+--------------------------------------------------------------------------------
+    * Model output parsed as JSON without schema validation          [sphere_llm_semgrep]
+    * LLM output → subprocess / SQL / eval (chained injection)       [rules/]
+
+--------------------------------------------------------------------------------
+  LLM06 · EXCESSIVE AGENCY / SSRF
+--------------------------------------------------------------------------------
+    * LLM outbound fetch to user-supplied URL                        [sphere_llm_semgrep]
+    * Bedrock image_url handler without allowlist                    [core]
+    * OpenAI image_url handler without allowlist                     [core]
+
+--------------------------------------------------------------------------------
+  LLM10 · MODEL THEFT / COST AMPLIFICATION
+--------------------------------------------------------------------------------
+    * Unbounded Pydantic string fields on LLM inputs (prompt, params) [core]
+    * No token / character caps on prompt fields                     [core]
+
+
+================================================================================
+  CROSS-CUTTING CATEGORIES
+================================================================================
+
+--------------------------------------------------------------------------------
+  SECRETS DETECTION
+--------------------------------------------------------------------------------
+    Cloud Provider Keys
+      * AWS Access Key ID (AKIA...)                                  [gitleaks, rules/aws-hardcoded-credentials]
+      * AWS Secret Access Key                                        [gitleaks]
+      * GCP API key (AIza...)                                        [gitleaks]
+      * GCP service-account JSON                                     [gitleaks]
+      * Azure connection strings                                     [gitleaks]
+
+    Private Keys
+      * RSA PRIVATE KEY                                              [gitleaks]
+      * EC PRIVATE KEY                                               [gitleaks]
+      * OPENSSH PRIVATE KEY                                          [gitleaks]
+
+    Database URLs with Embedded Credentials
+      * postgres:// mysql:// mongodb+srv:// with user:pass@          [gitleaks]
+
+    Version Control Tokens
+      * GitHub tokens (ghp_, gho_, ghu_, ghs_, ghr_)                 [gitleaks]
+      * GitLab PATs (glpat-...)                                      [gitleaks]
+
+    Messaging Tokens
+      * Slack tokens (xoxb-, xoxa-, xoxp-, xoxs-)                    [gitleaks]
+
+    Payment / API Tokens
+      * Stripe secret keys (sk_live_...)                             [gitleaks]
+      * Stripe restricted keys (rk_live_...)                         [gitleaks]
+      * SendGrid API key (SG.<token>.<token>)                        [gitleaks]
+
+    LLM Provider Keys
+      * OpenAI key (sk-...)                                          [gitleaks]
+      * Hugging Face token (hf_...)                                  [gitleaks]
+      * Anthropic API keys                                           [gitleaks]
+
+    JWT Literals
+      * eyJ...eyJ... in source                                       [gitleaks]
+
+    Bearer Token Literals
+      * Authorization: Bearer <token> hardcoded                      [gitleaks]
+
+    Halodoc-Specific Tokens
+      * Sphere X-App-Token pattern (UUID format)                     [sphere_llm_semgrep]
+      * Static app-token loops                                       [manual]
+
+    Webhook URLs with Embedded Tokens
+      * Slack webhooks (hooks.slack.com/services/...)                [core]
+      * Discord webhooks                                             [core]
+      * MS Teams webhooks (webhook.office.com/...)                   [core]
+      * Generic /webhook/<token> or /hooks/<token>                   [core]
+
+    Generic Secrets
+      * Hardcoded generic secret/apikey pattern                      [drogonsec LEAK-*, PY-003, core]
+      * hardcoded_secret (imported)                                  [rules/hardcoded_secret]
+
+
+--------------------------------------------------------------------------------
+  CROSS-SITE SCRIPTING (XSS)
+--------------------------------------------------------------------------------
+    * Reflected XSS — user data reflected into HTML                  [p/xss]
+    * DOM XSS — innerHTML from document.location / form              [rules/ts_dom_innerhtml_from_var]
+    * Stored XSS — user content persisted, rendered unescaped        [p/xss]
+    * React dangerouslySetInnerHTML                                  [p/xss]
+    * Manual HTML sanitization mistakes                              [bearer]
+    * Jinja2 direct use — mark_safe, |safe filter                    [opengrep, semgrep]
+    * Angular / Vue sanitization bypass                              [p/xss]
+    * p/xss pack (35 rules)                                          [p/xss]
+
+
+--------------------------------------------------------------------------------
+  CROSS-SITE REQUEST FORGERY (CSRF)
+--------------------------------------------------------------------------------
+    * Missing CSRF token on cookie-authenticated endpoints           [semgrep]
+    * CSRF token absence on Django / Flask forms                     [semgrep]
+    * Cookie missing sameSite=Strict                                 [core]
+
+
+--------------------------------------------------------------------------------
+  DENIAL OF SERVICE (CWE-400)
+--------------------------------------------------------------------------------
+    * Regex Denial of Service (ReDoS) — user-controlled pattern      [core, rules/cwe-400-redos]
+    * Unbounded async / goroutine spawn                              [rules/cwe-400-async-abuse]
+    * JSON parse in loop                                             [rules/cwe-400-json-parse-in-loop]
+    * Missing HTTP timeout                                           [core, bandit B113]
+    * Unbounded Pydantic string fields (LLM cost amplifier)          [core]
+    * Body-parse before auth (Beego copyrequestbody + maxMemory)     [manual]
+    * XML billion-laughs / DTD abuse                                 [XXE class]
+    * Zip-bomb / decompression bombs                                 [manual]
+
+
+--------------------------------------------------------------------------------
+  FILE SYSTEM · STORAGE · PERMISSIONS
+--------------------------------------------------------------------------------
+    Path Traversal in File Writes
+      * fmt.Sprintf("%s/%s", base, user_input)                       [core]
+      * open(user_path) / os.Open with tainted input                 [bearer]
+
+    Insecure Permissions
+      * World-writable dir — os.MkdirAll(path, 0777) / os.ModePerm   [core, gosec G301]
+      * World-writable file — WriteFile(..., os.ModePerm)            [gosec G306]
+      * Overshooting — > 0750 for dirs, > 0600 for files             [rules/file_permission]
+
+    Insecure Temp Files
+      * tempfile.mktemp (unsafe by design)                           [bandit B108]
+      * Hardcoded /tmp paths                                         [bandit B108]
+      * bad_tempfile in Go                                           [rules/bad_tempfile]
+
+    Filepath Misuse
+      * filepath.Join misuse                                         [rules/use-filepath-join]
+
+    Unrestricted File Upload
+      * No MIME check, no size cap                                   [rules/unrestricted-file-upload]
+
+    Insecure Data Storage
+      * Android SharedPreferences unencrypted                        [rules/insecure-data-storage-sharedpreferences]
+
+    Container / Volume Race Conditions
+      * chmod -R 777 in build scripts                                [manual]
+
+
+--------------------------------------------------------------------------------
+  CONTAINER · IaC · CLOUD MISCONFIGURATION
+--------------------------------------------------------------------------------
+    Dockerfile
+      * Runs as root (no USER)                                       [core, p/dockerfile]
+      * :latest mutable tag                                          [core, p/dockerfile]
+      * ADD http://                                                  [p/dockerfile]
+      * Secrets in ENV                                               [p/dockerfile]
+      * chmod 777 on build layers                                    [manual]
+
+    Kubernetes
+      * privileged: true containers                                  [p/kubernetes]
+      * hostNetwork / hostPath                                       [p/kubernetes]
+      * capabilities: SYS_ADMIN                                      [p/kubernetes]
+      * runAsRoot true                                               [p/kubernetes]
+
+    Terraform
+      * S3 buckets unencrypted                                       [rules/terraform-s3-unencrypted]
+      * Public S3 buckets                                            [rules/public-s3-bucket]
+      * IAM policies with * (wildcard)                               [rules/iam-wildcard-policy]
+      * Security groups open to 0.0.0.0/0                            [p/terraform]
+      * Unencrypted RDS / EBS                                        [p/terraform]
+
+    AWS Cloud
+      * S3 public-read policies                                      [rules/aws-secret-leak]
+      * RDS publicly accessible                                      [p/terraform]
+      * ELB with SSLv3 / weak ciphers                                [p/terraform]
+
+    Docker Compose
+      * Container running as root                                    [p/dockerfile]
+      * :latest image tag                                            [p/dockerfile]
+
+
+================================================================================
+  LANGUAGE-SPECIFIC ISSUES
+================================================================================
+
+--------------------------------------------------------------------------------
+  GO
+--------------------------------------------------------------------------------
+    * exported_loop_pointer (Go 1.22 loop-var semantics)             [bearer, rules/looppointer]
+    * Unchecked errors (G104)                                        [gosec]
+    * Integer overflow conversions (G115)                            [gosec]
+    * File permissions (G301 dir / G306 write)                       [gosec]
+    * math/rand for security (G404)                                  [gosec, rules/math_random]
+    * Unsafe reflect by name                                         [rules/unsafe-reflect-by-name]
+    * Hidden goroutine leaks                                         [rules/hidden-goroutine]
+    * Channel guarded with mutex misuse                              [rules/channel-guarded-with-mutex]
+    * HTTP trace enabled                                             [rules/http_trace]
+    * TLS bypass                                                     [rules/bypass_tls]
+    * Insecure SSH client                                            [rules/insecure_ssh]
+    * Overflow                                                       [rules/overflow]
+    * Useless equality checks                                        [rules/useless-eqeq]
+    * unsafe usage                                                   [rules/unsafe]
+
+--------------------------------------------------------------------------------
+  PYTHON
+--------------------------------------------------------------------------------
+    Bandit B-catalog (43+ rules):
+    * B101 assert_used                    * B102 exec_used
+    * B103 set_bad_file_permissions       * B104 hardcoded_bind_all_interfaces
+    * B105/B106/B107 hardcoded_password_* * B108 hardcoded_tmp_directory
+    * B110 try_except_pass                * B112 try_except_continue
+    * B113 request_without_timeout        * B201 flask_debug_true
+    * B301 blacklist_pickle               * B303/B304 weak_hash/ciphers
+    * B307 eval                           * B310 urllib_urlopen
+    * B311 random                         * B403 import_pickle
+    * B404 import_subprocess              * B501 verify=False in requests
+    * B506 yaml_load                      * B602 subprocess_shell_true
+    * B603 subprocess_no_shell            * B605 start_process_with_shell
+    * B608 hardcoded_sql_expressions      * B701 jinja2_autoescape_false
+
+--------------------------------------------------------------------------------
+  JAVA
+--------------------------------------------------------------------------------
+    * Servlets cookie isSecure=false                                 [rules/cookie-issecure-false]
+    * JAX-RS path traversal                                          [rules/jax-rs-path-traversal]
+    * Insecure RESTeasy provider                                     [rules/insecure-resteasy]
+    * Log4j lookup injection (Log4Shell)                             [rules/log4j-message-lookup-injection]
+    * AWS Lambda tainted SQL / SQLi                                  [rules/java/aws-lambda/]
+    * JAX-RS handler missing authz annotation                        [core]
+    * JDBC useSSL=false                                              [core]
+    * Jackson enableDefaultTyping                                    [core]
+
+--------------------------------------------------------------------------------
+  JAVASCRIPT / TYPESCRIPT / NODE.JS
+--------------------------------------------------------------------------------
+    * AWS hardcoded credentials                                      [rules/aws-hardcoded-credentials]
+    * child_process shell injection                                  [rules/child_process_shell_injection]
+    * Express sendfile path traversal                                [rules/express_sendfile_path_traversal]
+    * TS DOM innerHTML from variable                                 [rules/ts_dom_innerhtml_from_var]
+    * Axios / fetch URL from req                                     [rules/axios_fetch_url_from_req]
+    * jsonwebtoken decode without verify                             [rules/node_jsonwebtoken_decode_without_verify]
+    * Node.js high-critical bundle                                   [rules/Nodejs/nodejs-high-critical-only]
+
+--------------------------------------------------------------------------------
+  KOTLIN / ANDROID
+--------------------------------------------------------------------------------
+    * SQL injection potential                                        [rules/sql-injection-kotlin-potential-apps3c]
+    * Android WebView misconfig                                      [rules/android-webview-kotlin-apps3c]
+    * Insecure SharedPreferences data storage                        [rules/insecure-data-storage-sharedpreferences]
+    * Command injection detection                                    [rules/kotlin-command-injection-detection]
+
+--------------------------------------------------------------------------------
+  SWIFT / iOS
+--------------------------------------------------------------------------------
+    * Force unwrap                                                   [rules/force-unwrap]
+    * Insecure biometrics                                            [rules/insecure-biometrics]
+    * Weak crypto (RC4, DES, ECB, Blowfish, ChaCha20, scrypt)        [rules/swift/*]
+    * Hardcoded IV                                                   [rules/hardcoded-iv]
+    * Insecure RSA keysize                                           [rules/insecure-crypto-rsa-keysize]
+    * Swift crypto checks (general)                                  [rules/swift-crypto-checks]
+
+--------------------------------------------------------------------------------
+  PHP
+--------------------------------------------------------------------------------
+    * SQL concat in query                                            [rules/php_sql_concat_in_query]
+    * eval / create_function abuse                                   [rules/php_eval_create_function]
+    * Taint SQLi                                                     [rules/sql-injection-taint-php]
+
+--------------------------------------------------------------------------------
+  RUBY
+--------------------------------------------------------------------------------
+    * YAML.load / Marshal.load                                       [rules/]
+    * SQL injection taint                                            [rules/sql-injection-taint-rb]
+
+
+================================================================================
+  HALODOC / BUSINESS-SPECIFIC
+================================================================================
+
+    * Kafka unvalidated JSON messages                                [core]
+      → json.loads(event.get(...)) → business logic without pydantic
+    * X-App-Token static token pattern                               [sphere_llm_semgrep]
+    * FastAPI missing CORS / TrustedHost middleware                  [core]
+    * FastAPI route missing response_model= (fields leak)            [core]
+    * Sphere caller-supplied system_prompt                           [sphere_llm_semgrep]
+    * Sphere model output used without validation                    [sphere_llm_semgrep]
+    * Sphere prompt-injection Jinja render                           [sphere_llm_semgrep]
+    * Sphere LLM SSRF (image_url from LLM request)                   [sphere_llm_semgrep]
+    * Distributor webhook without signature verification             [manual]
+    * Beego auth ordering — Prepare() without StopRun()              [manual]
+    * getUserId() ownership-scope sanitizer recognition              [core]
+
+
+================================================================================
+  AWS LAMBDA-SPECIFIC
+================================================================================
+
+    * Dangerous system call in Lambda                                [rules/security.dangerous-system-call-aws-lambda]
+    * Tainted pickle deserialization in Lambda                       [rules/tainted-pickle-deserialization-aws-lambda]
+    * Tainted SQL string in Lambda (Java)                            [rules/java/aws-lambda/tainted-sql-string]
+    * Tainted SQLi via Lambda (Java)                                 [rules/java/aws-lambda/tainted-sqli]
+
+
+================================================================================
+  OPEN REDIRECT
+================================================================================
+
+    * User-controlled URL in Response.temporaryRedirect              [rules/open-redirect]
+    * res.redirect(user_url) (Node)                                  [rules/open-redirect]
+
+
+================================================================================
+  COVERAGE SUMMARY — RULES BY CLASS
+================================================================================
+
+  Class                                     | Rules  | Primary Sources
+  ------------------------------------------|--------|-------------------------
+  Injection (SQL/cmd/template/code/LDAP/XXE)|  ~130  | vendor packs + custom
+  Broken Access Control (IDOR / authz)      |   ~25  | core + imported
+  Cryptographic Failures                    |   ~55  | vendor + swift/kotlin
+  Security Misconfiguration                 |   ~85  | webhook + dockerfile + IaC
+  Identification & Authentication Failures  |   ~30  | JWT + custom
+  Software / Data Integrity Failures        |   ~15  | dedicated deser packs
+  Logging & Monitoring (PII / secrets)      |   ~15  | core (LLM-content extended)
+  SSRF                                      |   ~20  | core + LLM + imported
+  LLM Security (LLM01-10)                   |   ~15  | sphere_llm + core
+  Secrets Detection                         |  ~200  | gitleaks + custom
+  XSS                                       |   ~40  | p/xss + language-specific
+  DoS / ReDoS / Unbounded resource          |   ~30  | CWE-400 pack + custom
+  Filesystem / Permissions                  |   ~20  | gosec + imported
+  Container / IaC / Cloud Misconfig         |   ~85  | dockerfile/kubernetes/terraform
+  Language-specific (multi-lang)            |  ~200  | imported semgrep-master subtrees
+  Halodoc-specific                          |   ~15  | core + sphere_llm
+  AWS Lambda                                |    ~5  | imported aws-lambda subtrees
+  Open Redirect                             |    ~5  | imported
+  ------------------------------------------|--------|-------------------------
+  TOTAL curated rules per scan (per repo)   | ~1,000 | (dependent on framework tags)
+
+
+================================================================================
+  RULE PACK FILE INVENTORY
+================================================================================
+
+  /SAST/multi_sast/
+    sast_rulepack.yml                       20 rules  · Halodoc general
+    sphere_llm_semgrep.yml                   4 rules  · Sphere LLM
+    sast_webhook_misconfig.semgrep.yml       9 rules  · webhook + misconfig
+    idor.semgrep.yml                         3 rules  · IDOR (Python/Java/Go)
+    rules/                                 104 rules  · imported semgrep-master
+      ├── 30_high_confidence/                          · Auth · CI_CD · Cloud
+      │                                                  Code_Execution · Deserialisations
+      │                                                  IAC · Injection · JWT · Secrets · tls
+      │                                                  custom
+      ├── CWE-400/                                     · async · redos · json-parse-in-loop
+      ├── Nodejs/                                      · high-critical bundle
+      ├── go/                                          · lang + otto + jwt-go subtrees
+      ├── java/                                        · aws-lambda · jax-rs · java-jwt · log4j · servlets
+      ├── javascript/                                  · aws-hardcoded-credentials
+      ├── kotlin/                                      · SQLi · WebView · SharedPreferences
+      ├── python/                                      · aws-lambda · pickle-flask
+      └── swift/                                       · crypto · biometrics · force-unwrap
+
+  Auto-loaded Semgrep Registry vendor packs (framework-detected per repo):
+    p/default              (~1,074 rules)
+    p/security-audit       (~225 rules)
+    p/secrets              (~52 rules)
+    p/owasp-top-ten        (~560 rules)
+    p/cwe-top-25           (~216 rules)
+    p/insecure-transport   (~53 rules)
+    p/gitleaks             (~175 rules)
+    p/sql-injection        (~47 rules)
+    p/command-injection    (~31 rules)
+    p/xss                  (~35 rules)
+    p/python               (~151 rules)     [Python repos]
+    p/javascript           (~74 rules)      [JS/TS repos]
+    p/typescript           (~74 rules)      [TS repos]
+    p/java                 (~60 rules)      [Java repos]
+    p/gosec                (~23 rules)      [Go repos]
+    p/kotlin               (~10 rules)      [Kotlin repos]
+    p/ruby                 (~45 rules)      [Ruby repos]
+    p/php                  (~24 rules)      [PHP repos]
+    p/scala                (~12 rules)      [Scala repos]
+    p/csharp               (~27 rules)      [C# repos]
+    p/nodejsscan           (~114 rules)     [Node repos]
+    p/react                (~4 rules)       [React repos]
+    p/fastapi              (~1 rule)        [FastAPI repos]
+    p/flask                (~18 rules)      [Flask repos]
+    p/django               (~28 rules)      [Django repos]
+    p/jwt                  (~16 rules)      [JWT-using repos]
+    p/koa                  (~34 rules)      [Koa.js repos]
+    p/kubernetes           (~11 rules)      [K8s manifests]
+    p/dockerfile           (~7 rules)       [Dockerfile]
+    p/docker               (~7 rules)       [Docker Compose]
+    p/terraform            (~63 rules)      [.tf files]
+
+
+================================================================================
+  OUT OF SCOPE (BY DESIGN)
+================================================================================
+
+  ARGUS is a SAST tool — the following capabilities are addressed by adjacent
+  security tooling in the Halodoc stack:
+
+    * Full dependency-CVE scanning (SCA)   → osv-scanner · pip-audit · npm-audit · Trivy
+    * Runtime / dynamic testing (DAST)     → OWASP ZAP · Burp Suite · Nuclei
+    * Container image vuln scanning        → Trivy image · Grype
+    * Runtime memory / behavior analysis   → IAST tools · runtime instrumentation
+    * SBOM generation                      → Syft · CycloneDX
+    * Live secret rotation / vault audit   → separate secret-management stack
+
+  ARGUS integrates with these tools via SARIF output — every finding it emits
+  can be consumed by the same dashboards (GitHub Code Scanning, GitLab SAST
+  reports, Jenkins Warnings-NG) that ingest results from the tools above.
+
+
+================================================================================
+  DOCUMENT VERSION
+================================================================================
+
+  Generated for : ARGUS v1.0.0
+  Rule counts   : approximate — vendor-pack sizes vary with Semgrep Registry updates
+  Detection     : SAST (pattern-matching + AST + limited taint tracking)
+  Confidence    : cross-scanner corroboration (see argus.py :: _confidence)
+
+================================================================================

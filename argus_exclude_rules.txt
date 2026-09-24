@@ -1,0 +1,106 @@
+# argus global rule exclusions
+# 
+# Conservative multi-repo profile intersection.
+# A rule is here ONLY IF:
+#   1) It appeared in >=2 of the 5 profiled repos
+#   2) It produced 0 findings on EVERY repo where it appeared
+#   3) It cost >=50ms match+parse on at least one repo
+# 
+# Auto-populated 2026-09-21 from profiles across:
+#   consultation-master, derawan-fulfillment-master,
+#   derawan-oms-master, portal-d-master, sphere-platform-master
+# Total: 93 rules, cumulative cost saved across 5 scans: 127.5s
+# 
+java.spring.security.injection.tainted-sql-string.tainted-sql-string
+java.lang.security.audit.formatted-sql-string.formatted-sql-string
+java.spring.security.audit.spring-sqli.spring-sqli
+java.spring.security.injection.tainted-file-path.tainted-file-path
+java.lang.security.audit.tainted-cmd-from-http-request.tainted-cmd-from-http-request
+java.spring.security.injection.tainted-url-host.tainted-url-host
+java.spring.security.injection.tainted-system-command.tainted-system-command
+java.lang.security.audit.xss.no-direct-response-writer.no-direct-response-writer
+java.lang.security.audit.command-injection-formatted-runtime-call.command-injection-formatted-runtime-call
+python.boto3.security.hardcoded-token.hardcoded-token
+java.lang.security.audit.sqli.tainted-sql-from-http-request.tainted-sql-from-http-request
+python.lang.security.audit.dangerous-system-call-tainted-env-args.dangerous-system-call-tainted-env-args
+java.lang.security.httpservlet-path-traversal.httpservlet-path-traversal
+go.lang.security.injection.tainted-sql-string.tainted-sql-string
+python.lang.security.audit.insecure-transport.requests.request-with-http.request-with-http
+go.lang.security.injection.raw-html-format.raw-html-format
+python.django.security.injection.raw-html-format.raw-html-format
+python.lang.security.dangerous-system-call.dangerous-system-call
+go.lang.security.injection.tainted-url-host.tainted-url-host
+python.flask.security.audit.directly-returned-format-string.directly-returned-format-string
+python.django.security.nan-injection.nan-injection
+generic.secrets.security.detected-username-and-password-in-uri.detected-username-and-password-in-uri
+java.spring.security.audit.spring-unvalidated-redirect.spring-unvalidated-redirect
+python.django.security.audit.xss.template-translate-as-no-escape.template-translate-as-no-escape
+python.django.security.injection.path-traversal.path-traversal-open.path-traversal-open
+go.lang.security.audit.database.string-formatted-query.string-formatted-query
+python.django.security.injection.tainted-sql-string.tainted-sql-string
+python.django.security.injection.tainted-url-host.tainted-url-host
+python.django.security.injection.command.command-injection-os-system.command-injection-os-system
+trailofbits.go.racy-write-to-map.racy-write-to-map
+trailofbits.go.sync-mutex-value-copied.sync-mutex-value-copied
+trailofbits.go.invalid-usage-of-modified-variable.invalid-usage-of-modified-variable
+java.lang.security.audit.crypto.des-is-deprecated.des-is-deprecated
+python.django.security.injection.ssrf.ssrf-injection-requests.ssrf-injection-requests
+python.django.security.injection.sql.sql-injection-using-db-cursor-execute.sql-injection-db-cursor-execute
+python.lang.security.audit.dangerous-subprocess-use-tainted-env-args.dangerous-subprocess-use-tainted-env-args
+python.aws-lambda.security.tainted-html-string.tainted-html-string
+python.django.security.injection.code.user-exec-format-string.user-exec-format-string
+python.django.security.injection.path-traversal.path-traversal-file-name.path-traversal-file-name
+problem-based-packs.insecure-transport.go-stdlib.grequests-http-request.grequests-http-request
+trailofbits.go.racy-append-to-slice.racy-append-to-slice
+java.lang.security.audit.crypto.desede-is-deprecated.desede-is-deprecated
+python.aws-lambda.security.tainted-html-response.tainted-html-response
+python.django.security.injection.request-data-write.request-data-write
+python.django.security.injection.sql.sql-injection-extra.sql-injection-using-extra-where
+java.lang.security.audit.crypto.rsa-no-padding.rsa-no-padding
+python.flask.security.injection.nan-injection.nan-injection
+python.aws-lambda.security.tainted-sql-string.tainted-sql-string
+python.django.security.injection.sql.sql-injection-using-raw.sql-injection-using-raw
+python.flask.security.audit.wtf-csrf-disabled.flask-wtf-csrf-disabled
+python.django.security.injection.csv-writer-injection.csv-writer-injection
+python.flask.security.injection.tainted-sql-string.tainted-sql-string
+java.lang.security.audit.crypto.use-of-aes-ecb.use-of-aes-ecb
+java.lang.security.audit.crypto.use-of-rc4.use-of-rc4
+java.lang.security.audit.crypto.use-of-rc2.use-of-rc2
+java.lang.security.audit.crypto.use-of-blowfish.use-of-blowfish
+python.sqlalchemy.security.sqlalchemy-sql-injection.sqlalchemy-sql-injection
+java.lang.security.audit.permissive-cors.permissive-cors
+trailofbits.go.string-to-int-signedness-cast.string-to-int-signedness-cast
+python.django.security.injection.code.user-eval-format-string.user-eval-format-string
+trailofbits.go.missing-unlock-before-return.missing-unlock-before-return
+python.django.security.injection.command.subprocess-injection.subprocess-injection
+json.aws.security.public-s3-policy-statement.public-s3-policy-statement
+python.flask.security.injection.raw-html-concat.raw-html-format
+python.lang.security.audit.insecure-file-permissions.insecure-file-permissions
+python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
+python.aws-lambda.security.tainted-code-exec.tainted-code-exec
+problem-based-packs.insecure-transport.go-stdlib.http-request.http-request
+java.lang.security.audit.crypto.weak-random.weak-random
+yaml.kubernetes.security.secrets-in-config-file.secrets-in-config-file
+python.flask.security.injection.ssrf-requests.ssrf-requests
+python.sh.security.string-concat.string-concat
+python.flask.security.audit.hardcoded-config.avoid_hardcoded_config_DEBUG
+python.flask.security.audit.hardcoded-config.avoid_hardcoded_config_TESTING
+python.django.security.injection.path-traversal.path-traversal-join.path-traversal-join
+java.jax-rs.security.jax-rs-path-traversal.jax-rs-path-traversal
+python.aws-lambda.security.sqlalchemy-sqli.sqlalchemy-sqli
+python.lang.security.dangerous-subprocess-use.dangerous-subprocess-use
+python.aws-lambda.security.dangerous-system-call.dangerous-system-call
+go.lang.security.bad_tmp.bad-tmp-file-creation
+problem-based-packs.insecure-transport.java-stdlib.httpget-http-request.httpget-http-request
+python.lang.security.audit.formatted-sql-query.formatted-sql-query
+python.django.security.audit.xss.context-autoescape-off.context-autoescape-off
+python.flask.security.injection.tainted-url-host.tainted-url-host
+python.flask.security.audit.hardcoded-config.avoid_hardcoded_config_SECRET_KEY
+python.django.security.injection.code.user-exec.user-exec
+python.lang.security.audit.logging.logger-credential-leak.python-logger-credential-disclosure
+python.flask.security.audit.hardcoded-config.avoid_hardcoded_config_ENV
+python.lang.security.audit.sqli.asyncpg-sqli.asyncpg-sqli
+python.django.security.injection.code.user-eval.user-eval
+python.lang.security.audit.system-wildcard-detected.system-wildcard-detected
+python.django.security.audit.avoid-insecure-deserialization.avoid-insecure-deserialization
+python.django.security.audit.xss.global-autoescape-off.global-autoescape-off

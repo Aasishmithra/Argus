@@ -1,0 +1,142 @@
+rules:
+  - id: beego-runmode-dev-in-prod
+    languages: [generic]
+    paths:
+      include:
+        - "*config-prod*"
+        - "*config_prod*"
+        - "*application_config_prod*"
+        - "*application-config-prod*"
+    patterns:
+      - pattern-regex: '"runmode"\s*:\s*"dev"'
+    severity: ERROR
+    metadata:
+      cwe: "CWE-489"
+      category: "config"
+      subcategory: ["prod-misconfig"]
+      confidence: HIGH
+      likelihood: HIGH
+      impact: HIGH
+      technology: [beego]
+      references:
+        - https://cwe.mitre.org/data/definitions/489.html
+    message: >-
+      Beego runmode=dev in a production-scoped config enables verbose stack traces,
+      swagger UI, and dev-only routes. Set runmode=prod for production deployments.
+
+  - id: beego-admin-enabled-in-prod
+    languages: [generic]
+    paths:
+      include:
+        - "*config-prod*"
+        - "*config_prod*"
+    patterns:
+      - pattern-regex: '"enableadmin"\s*:\s*true'
+    severity: ERROR
+    metadata:
+      cwe: "CWE-16"
+      category: "config"
+      subcategory: ["prod-misconfig"]
+      confidence: HIGH
+      likelihood: HIGH
+      impact: HIGH
+      technology: [beego]
+    message: >-
+      Beego admin (pprof, /listconf, /healthcheck, /routers) enabled in a production-
+      scoped config. Set enableadmin=false for production.
+
+  - id: beego-docs-enabled-in-prod
+    languages: [generic]
+    paths:
+      include:
+        - "*config-prod*"
+        - "*config_prod*"
+    patterns:
+      - pattern-regex: '"enabledocs"\s*:\s*true'
+    severity: ERROR
+    metadata:
+      cwe: "CWE-16"
+      category: "config"
+      subcategory: ["prod-misconfig"]
+      confidence: HIGH
+      likelihood: MEDIUM
+      impact: MEDIUM
+      technology: [beego]
+    message: >-
+      Beego auto-generated API docs exposed in a production-scoped config. Set
+      enabledocs=false for production.
+
+  - id: dev-qa-token-accepted-in-prod
+    languages: [generic]
+    paths:
+      include:
+        - "*config-prod*"
+        - "*config_prod*"
+        - "*application_config_prod*"
+    patterns:
+      - pattern-either:
+          - pattern-regex: '\$\{DEV[_-]?TOKEN\}'
+          - pattern-regex: '\$\{QA[_-]?TOKEN\}'
+          - pattern-regex: '\$\{TEST[_-]?TOKEN\}'
+          - pattern-regex: '\$\{STAGING[_-]?TOKEN\}'
+    severity: ERROR
+    metadata:
+      cwe: "CWE-798"
+      category: "auth"
+      subcategory: ["prod-token-leak"]
+      confidence: HIGH
+      likelihood: HIGH
+      impact: HIGH
+    message: >-
+      Non-production token (${DEV_TOKEN}/${QA_TOKEN}/etc) accepted in a production
+      config file. Dev/QA/staging tokens must NEVER be valid in production.
+
+  - id: webhook-handler-references-auth-token
+    languages: [generic]
+    paths:
+      include:
+        - "*service*"
+        - "*controller*"
+        - "*handler*"
+        - "*webhook*"
+    patterns:
+      - pattern-regex: '\.AuthToken|\.auth_token'
+      - pattern-not-regex: '(hmac\.Equal|subtle\.ConstantTimeCompare|VerifySignature|VerifyHMAC)'
+    severity: WARNING
+    metadata:
+      cwe: "CWE-345"
+      category: "auth"
+      subcategory: ["webhook-signature-absent"]
+      confidence: MEDIUM
+      likelihood: HIGH
+      impact: HIGH
+    message: >-
+      Handler references .AuthToken/.auth_token but no HMAC/signature verification
+      (hmac.Equal / subtle.ConstantTimeCompare) is present in the same file.
+      Verify the payload signature before trusting the event.
+
+  - id: fastapi-app-missing-cors
+    languages: [python]
+    paths:
+      include:
+        - "main.py"
+        - "app.py"
+        - "src/main.py"
+    patterns:
+      - pattern-either:
+          - pattern: app = FastAPI(...)
+          - pattern: app = fastapi.FastAPI(...)
+      - pattern-not-regex: '(CORSMiddleware|TrustedHostMiddleware)'
+    severity: WARNING
+    metadata:
+      cwe: "CWE-942"
+      category: "config"
+      subcategory: ["missing-middleware"]
+      confidence: MEDIUM
+      likelihood: MEDIUM
+      impact: MEDIUM
+      technology: [fastapi]
+    message: >-
+      FastAPI app has no CORSMiddleware or TrustedHostMiddleware registered.
+      Add app.add_middleware(CORSMiddleware, allow_origins=[...]) and/or
+      TrustedHostMiddleware to enforce origin/host restrictions.
