@@ -1,0 +1,26 @@
+rules:
+  - id: critical-code-exec-eval
+    severity: ERROR
+    message: Dangerous code execution function used with untrusted input.
+    languages: [javascript, typescript, python, php, ruby, java, kotlin]
+    mode: taint
+    pattern-sources:
+      - pattern-either:
+          - pattern: req.query[$X]
+          - pattern: req.body[$X]
+          - pattern: request.args[$X]
+          - pattern: $_GET[$X]
+          - pattern: $_POST[$X]
+          - pattern: params[$X]
+    pattern-sinks:
+      - pattern-either:
+          - pattern: eval($X)
+          - pattern: Function($X)
+          - pattern: exec($X)
+          - pattern: system($X)
+          - pattern: shell_exec($X)
+          - pattern: subprocess.Popen($X, ...)
+          - pattern: os.system($X)
+    metadata:
+      cwe: "CWE-94"
+      confidence: HIGH

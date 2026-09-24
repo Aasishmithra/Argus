@@ -1,0 +1,86 @@
+# Hardcoded IV / static salt / static nonce for symmetric crypto or KDFs.
+# Nonce reuse under the same key is catastrophic (GCM: authentication key
+# recovery; CBC/CTR: plaintext-XOR leak). Static PBKDF2/HKDF salt enables
+# precomputed rainbow tables. Per-language rules — semgrep's frontend per
+# language can't share syntax across Java / Python / Node / Go.
+rules:
+  - id: hardcoded-crypto-iv-python
+    languages: [python]
+    severity: ERROR
+    message: |
+      Hardcoded IV / nonce / salt in a symmetric cipher or KDF. Fresh random
+      IV must be generated per message: `iv = os.urandom(12)` (GCM) /
+      `os.urandom(16)` (CBC), prepended to ciphertext. Fresh per-record salt
+      for PBKDF2/HKDF: `salt = os.urandom(16)`, stored alongside the hash.
+    metadata:
+      cwe: 'CWE-330: Use of Insufficiently Random Values'
+      owasp: 'A02:2021 Cryptographic Failures'
+      category: security
+      confidence: HIGH
+    patterns:
+      - pattern-either:
+          - pattern: AES.new($KEY, AES.MODE_GCM, nonce=b"...")
+          - pattern: AES.new($KEY, AES.MODE_CBC, iv=b"...")
+          - pattern: AES.new($KEY, AES.MODE_CTR, nonce=b"...")
+          - pattern: 'Cipher($ALG, modes.GCM(b"..."), ...)'
+          - pattern: 'Cipher($ALG, modes.CBC(b"..."), ...)'
+          - pattern: 'Cipher($ALG, modes.CTR(b"..."), ...)'
+          - pattern: 'PBKDF2HMAC(algorithm=$H, length=$L, salt=b"...", iterations=$I)'
+
+  - id: hardcoded-crypto-iv-java
+    languages: [java, kotlin]
+    severity: ERROR
+    message: |
+      Hardcoded IV / nonce passed to a Java cipher. Fix: generate with
+      SecureRandom per message: `byte[] iv = new byte[12]; new
+      SecureRandom().nextBytes(iv); IvParameterSpec ivSpec = new
+      IvParameterSpec(iv);` — then prepend iv to the output ciphertext.
+    metadata:
+      cwe: 'CWE-330'
+      owasp: 'A02:2021 Cryptographic Failures'
+      category: security
+      confidence: HIGH
+    patterns:
+      - pattern-either:
+          - pattern: new IvParameterSpec($X.getBytes())
+          - pattern: new IvParameterSpec($X.getBytes(...))
+          - pattern: new GCMParameterSpec($TAG, $X.getBytes())
+          - pattern: new GCMParameterSpec($TAG, $X.getBytes(...))
+      - metavariable-regex:
+          metavariable: $X
+          regex: '"[^"]{1,32}"'   # matches a string literal, i.e. hardcoded
+
+  - id: hardcoded-crypto-iv-js
+    languages: [javascript, typescript]
+    severity: ERROR
+    message: |
+      Hardcoded IV supplied to node crypto. Fix: `crypto.randomBytes(12)` for
+      GCM / `crypto.randomBytes(16)` for CBC, per message. Prepend iv to
+      ciphertext for storage.
+    metadata:
+      cwe: 'CWE-330'
+      owasp: 'A02:2021 Cryptographic Failures'
+      category: security
+      confidence: HIGH
+    patterns:
+      - pattern-either:
+          - pattern: crypto.createCipheriv($ALG, $KEY, "...")
+          - pattern: crypto.createDecipheriv($ALG, $KEY, "...")
+
+  - id: hardcoded-crypto-iv-go
+    languages: [go]
+    severity: ERROR
+    message: |
+      Hardcoded IV supplied to a Go cipher. Fix: `iv := make([]byte, 12);
+      if _, err := rand.Read(iv); err != nil { ... }` — using `crypto/rand`,
+      not `math/rand`.
+    metadata:
+      cwe: 'CWE-330'
+      owasp: 'A02:2021 Cryptographic Failures'
+      category: security
+      confidence: HIGH
+    patterns:
+      - pattern-either:
+          - pattern: cipher.NewCTR($BLOCK, []byte("..."))
+          - pattern: cipher.NewCBCEncrypter($BLOCK, []byte("..."))
+          - pattern: cipher.NewCBCDecrypter($BLOCK, []byte("..."))

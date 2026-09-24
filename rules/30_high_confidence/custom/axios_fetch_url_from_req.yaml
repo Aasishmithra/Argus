@@ -1,0 +1,18 @@
+rules:
+  - id: axios-or-fetch-from-req
+    severity: ERROR
+    message: Potential SSRF — URL from request used in outbound call.
+    languages: [javascript, typescript]
+    mode: taint
+    pattern-sources:
+      - pattern-either:
+          - pattern: req.query[$X]
+          - pattern: req.body[$X]
+          - pattern: request.query[$X]
+    pattern-sinks:
+      - pattern-either:
+          - pattern: axios.get($U, ...)
+          - pattern: fetch($U, ...)
+    metadata:
+      cwe: "CWE-918"
+      confidence: HIGH

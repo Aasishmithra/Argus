@@ -1,0 +1,13 @@
+rules:
+  - id: php-sql-concat-in-query
+    severity: ERROR
+    message: SQL built with concatenation passed to query; use prepared statements.
+    languages: [php]
+    patterns:
+      - pattern-either:
+          - pattern: mysqli_query($C, $Q1.$Q2)
+          - pattern: $PDO->query($Q1.$Q2)
+          - pattern: $PDO->exec($Q1.$Q2)
+    metadata:
+      cwe: "CWE-89"
+      confidence: HIGH

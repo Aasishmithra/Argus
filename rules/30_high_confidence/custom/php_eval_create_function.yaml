@@ -1,0 +1,12 @@
+rules:
+  - id: php-eval-create-function
+    severity: ERROR
+    message: Dangerous PHP eval/create_function usage.
+    languages: [php]
+    patterns:
+      - pattern-either:
+          - pattern: eval($X)
+          - pattern: create_function($A, $B)
+    metadata:
+      cwe: "CWE-94"
+      confidence: HIGH

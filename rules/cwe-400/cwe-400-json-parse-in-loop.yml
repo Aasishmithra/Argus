@@ -1,0 +1,14 @@
+rules:
+- id: cwe-400-json-parse-loop
+  patterns:
+    - pattern: |
+        for (...) {
+          JSON.parse($DATA);
+        }
+  languages: [javascript, typescript]
+  message: |
+    JSON.parse inside a loop can become a performance bottleneck. Consider moving it outside or limiting iterations (CWE-400).
+  severity: WARNING
+  metadata:
+    cwe: "CWE-400"
+    environment: "Node.js"

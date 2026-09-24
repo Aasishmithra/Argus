@@ -1,0 +1,23 @@
+rules:
+  - id: node-child-process-shell-injection
+    severity: ERROR
+    message: Untrusted input to child_process with shell=true.
+    languages: [javascript, typescript]
+    mode: taint
+    pattern-sources:
+      - pattern-either:
+          - pattern: req.query[$X]
+          - pattern: req.body[$X]
+          - pattern: request.query[$X]
+          - pattern: request.body[$X]
+    pattern-sinks:
+      - pattern-either:
+          - pattern: |-
+              child_process.exec($C, ...)
+          - pattern: |-
+              child_process.execFile($C, { shell: true, ... })
+          - pattern: |-
+              child_process.spawn($C, ..., { shell: true, ... })
+    metadata:
+      cwe: "CWE-78"
+      confidence: HIGH

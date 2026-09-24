@@ -1,0 +1,85 @@
+# SSRF (Server-Side Request Forgery) — HTTP request URL derived from user
+# input. Attacker pivots to internal services or cloud-metadata endpoints
+# (169.254.169.254 → IAM credentials → full account takeover). Covers the
+# major Java HTTP clients: stdlib URL/URLConnection, Apache HttpClient,
+# OkHttp, Spring WebClient/RestTemplate, JAX-RS WebTarget, JDK 11 HttpClient.
+rules:
+  - id: ssrf-tainted-url-java
+    languages: [java, kotlin]
+    severity: ERROR
+    mode: taint
+    message: |
+      HTTP request URL derived from user input allows Server-Side Request
+      Forgery (SSRF). Attackers can pivot to internal services (Redis, DB,
+      admin panels), hit cloud-metadata endpoints (`169.254.169.254` → AWS
+      IMDS → IAM credentials → account takeover), or make the app act as
+      an open proxy.
+
+      Fix: (1) validate the URL against an allowlist of hosts/domains,
+      (2) resolve DNS and block private/link-local/loopback IP ranges
+      (10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 127.0.0.0/8,
+      169.254.0.0/16, ::1, fe80::/10), (3) disallow non-HTTP(S) schemes
+      (file://, gopher://, dict://), (4) disable HTTP redirect following
+      or re-validate the target after each redirect.
+    metadata:
+      cwe: 'CWE-918: Server-Side Request Forgery'
+      owasp: 'A10:2021 Server-Side Request Forgery'
+      category: security
+      confidence: HIGH
+      likelihood: MEDIUM
+      impact: HIGH
+    pattern-sources:
+      - pattern: $REQ.getParameter(...)
+      - pattern: $REQ.getHeader(...)
+      - pattern: $REQ.getInputStream()
+      - pattern: $REQ.getReader()
+      - pattern: '@RequestParam(...) $T $X'
+      - pattern: '@RequestHeader(...) $T $X'
+      - pattern: '@RequestBody(...) $T $X'
+      - pattern: '@PathVariable(...) $T $X'
+      - pattern: '@ModelAttribute(...) $T $X'
+      - pattern: '@javax.ws.rs.QueryParam(...) $T $X'
+      - pattern: '@javax.ws.rs.PathParam(...) $T $X'
+      - pattern: '@javax.ws.rs.HeaderParam(...) $T $X'
+      - pattern: '@javax.ws.rs.FormParam(...) $T $X'
+      - pattern: '@jakarta.ws.rs.QueryParam(...) $T $X'
+      - pattern: '@jakarta.ws.rs.PathParam(...) $T $X'
+      - pattern: '@jakarta.ws.rs.HeaderParam(...) $T $X'
+    pattern-sinks:
+      - pattern-either:
+          # java.net stdlib
+          - pattern: new URL($X)
+          - pattern: new URI($X)
+          - pattern: URI.create($X)
+          # JDK 11 HttpClient
+          - pattern: HttpRequest.newBuilder().uri(URI.create($X))
+          - pattern: HttpRequest.newBuilder($X)
+          # Apache HttpClient
+          - pattern: new HttpGet($X)
+          - pattern: new HttpPost($X)
+          - pattern: new HttpPut($X)
+          - pattern: new HttpDelete($X)
+          - pattern: new HttpHead($X)
+          - pattern: new HttpPatch($X)
+          - pattern: $CLIENT.execute(new HttpGet($X))
+          - pattern: $CLIENT.execute(new HttpPost($X))
+          # OkHttp
+          - pattern: new okhttp3.Request.Builder().url($X)
+          - pattern: $BUILDER.url($X)
+          # Spring WebClient
+          - pattern: WebClient.create($X)
+          - pattern: WebClient.create().get().uri($X)
+          - pattern: WebClient.create().post().uri($X)
+          # Spring RestTemplate
+          - pattern: $REST.getForObject($X, ...)
+          - pattern: $REST.getForEntity($X, ...)
+          - pattern: $REST.postForObject($X, ...)
+          - pattern: $REST.postForEntity($X, ...)
+          - pattern: $REST.exchange($X, ...)
+          # JAX-RS client
+          - pattern: $CLIENT.target($X)
+          # Feign, Retrofit URL builders
+          - pattern: $BUILDER.baseUrl($X)
+    pattern-sanitizers:
+      - pattern: $VALIDATOR.isAllowedHost($X)
+      - pattern: $VALIDATOR.validateUrl($X)

@@ -1,0 +1,24 @@
+rules:
+  - id: open-redirect
+    severity: ERROR
+    message: Open redirect — untrusted URL used in redirect.
+    languages: [javascript, typescript, php, ruby, java, kotlin]
+    mode: taint
+    pattern-sources:
+      - pattern-either:
+          - pattern: req.query[$X]
+          - pattern: req.params[$X]
+          - pattern: $_GET[$X]
+          - pattern: $_POST[$X]
+          - pattern: params[$X]
+    pattern-sinks:
+      - pattern-either:
+          - pattern: |-
+              res.redirect($U)
+          - pattern: |-
+              header("Location: " . $U)
+          - pattern: |-
+              redirect_to($U)
+    metadata:
+      cwe: "CWE-601"
+      confidence: HIGH

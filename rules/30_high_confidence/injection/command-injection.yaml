@@ -1,0 +1,25 @@
+rules:
+  - id: command-injection-taint
+    severity: ERROR
+    message: Command injection — untrusted input to command execution sink.
+    languages: [javascript, typescript, python, php, ruby, java, kotlin]
+    mode: taint
+    pattern-sources:
+      - pattern-either:
+          - pattern: req.query[$X]
+          - pattern: req.body[$X]
+          - pattern: request.args[$X]
+          - pattern: $_GET[$X]
+          - pattern: $_POST[$X]
+          - pattern: params[$X]
+    pattern-sinks:
+      - pattern-either:
+          - pattern: child_process.exec($C, ...)
+          - pattern: os.system($C)
+          - pattern: subprocess.run($C, shell=True, ...)
+          - pattern: exec($C)
+          - pattern: system($C)
+          - pattern: shell_exec($C)
+    metadata:
+      cwe: "CWE-77"
+      confidence: HIGH

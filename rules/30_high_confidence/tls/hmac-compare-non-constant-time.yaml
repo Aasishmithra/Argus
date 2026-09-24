@@ -1,0 +1,83 @@
+# HMAC / signature comparison via `==` (or `equals()`, `===`, `bytes.Equal`)
+# is non-constant-time and leaks byte-by-byte timing to an attacker who can
+# measure request latency. Common in webhook signature checks, session /
+# CSRF token compares, and API-key checks. Per-language rules so semgrep's
+# parser doesn't get language-specific syntax across the wrong frontend.
+rules:
+  - id: hmac-comparison-non-constant-time-python
+    languages: [python]
+    severity: ERROR
+    message: |
+      MAC / HMAC / signature / token compared with `==`. Standard string /
+      bytes equality in Python is non-constant-time. Fix: `hmac.compare_digest(
+      expected, actual)` or `secrets.compare_digest(a, b)`.
+    metadata:
+      cwe: 'CWE-208: Observable Timing Discrepancy'
+      owasp: 'A02:2021 Cryptographic Failures'
+      category: security
+      confidence: MEDIUM
+    patterns:
+      - pattern-either:
+          - pattern: hmac.new(...).hexdigest() == $USER
+          - pattern: $USER == hmac.new(...).hexdigest()
+          - pattern: hmac.new(...).digest() == $USER
+          - pattern: $USER == hmac.new(...).digest()
+          - pattern: hashlib.sha256($X).hexdigest() == $USER
+          - pattern: hashlib.sha1($X).hexdigest() == $USER
+
+  - id: hmac-comparison-non-constant-time-js
+    languages: [javascript, typescript]
+    severity: ERROR
+    message: |
+      MAC / HMAC compared with `===` — non-constant-time. Fix:
+      `crypto.timingSafeEqual(Buffer.from(a), Buffer.from(b))` (both same length).
+    metadata:
+      cwe: 'CWE-208'
+      owasp: 'A02:2021 Cryptographic Failures'
+      category: security
+      confidence: MEDIUM
+    patterns:
+      - pattern-either:
+          - pattern: crypto.createHmac(...).digest($ENC) === $USER
+          - pattern: $USER === crypto.createHmac(...).digest($ENC)
+          - pattern: crypto.createHmac(...).digest() === $USER
+
+  - id: hmac-comparison-non-constant-time-java
+    languages: [java, kotlin]
+    severity: ERROR
+    message: |
+      MAC / signature / token compared with `.equals()` / `Arrays.equals()` —
+      neither is constant-time on JVM. Fix: `MessageDigest.isEqual(a, b)`
+      which IS constant-time for byte arrays.
+    metadata:
+      cwe: 'CWE-208'
+      owasp: 'A02:2021 Cryptographic Failures'
+      category: security
+      confidence: MEDIUM
+    patterns:
+      - patterns:
+          - pattern-either:
+              - pattern: $EXPECTED.equals($USER)
+              - pattern: $USER.equals($EXPECTED)
+              - pattern: Arrays.equals($EXPECTED, $USER)
+              - pattern: Arrays.equals($USER, $EXPECTED)
+          - metavariable-regex:
+              metavariable: $EXPECTED
+              regex: '.*(sig|hmac|mac|signature|token|hash|digest).*'
+
+  - id: hmac-comparison-non-constant-time-go
+    languages: [go]
+    severity: ERROR
+    message: |
+      MAC / signature compared with `==` / `bytes.Equal` — non-constant-time.
+      Fix: `subtle.ConstantTimeCompare(a, b) == 1` from `crypto/subtle`.
+    metadata:
+      cwe: 'CWE-208'
+      owasp: 'A02:2021 Cryptographic Failures'
+      category: security
+      confidence: MEDIUM
+    patterns:
+      - pattern-either:
+          - pattern: bytes.Equal($MAC.Sum(nil), $USER)
+          - pattern: bytes.Equal($USER, $MAC.Sum(nil))
+          - pattern: hmac.Equal($USER, $MAC.Sum(nil))

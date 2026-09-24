@@ -1,0 +1,10 @@
+rules:
+  - id: ts-dom-innerhtml-from-var
+    severity: ERROR
+    message: DOM XSS risk — assigning variable to innerHTML.
+    languages: [typescript, javascript]
+    patterns:
+      - pattern: $EL.innerHTML = $X
+    metadata:
+      cwe: "CWE-79"
+      confidence: HIGH

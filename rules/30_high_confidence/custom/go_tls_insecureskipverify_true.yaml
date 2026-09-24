@@ -1,0 +1,10 @@
+rules:
+  - id: go-insecure-tls-skip-verify
+    severity: ERROR
+    message: Insecure TLS setting InsecureSkipVerify=true
+    languages: [go]
+    pattern: &P |
+      &tls.Config{ InsecureSkipVerify: true, ... }
+    metadata:
+      cwe: "CWE-295"
+      confidence: HIGH

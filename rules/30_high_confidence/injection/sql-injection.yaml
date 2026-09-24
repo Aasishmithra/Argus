@@ -1,0 +1,283 @@
+rules:
+  - id: sql-injection-taint-js
+    severity: ERROR
+    message: "SQL injection — untrusted data flows into a SQL execution sink (JS/TS)."
+    languages: [javascript, typescript]
+    mode: taint
+    pattern-sources:
+      - pattern-either:
+          - pattern: req.query[$X]
+          - pattern: req.params[$X]
+          - pattern: req.body[$X]
+          - pattern: req.cookies[$X]
+          - pattern: req.headers[$X]
+          - pattern: request.query[$X]
+          - pattern: request.params[$X]
+          - pattern: request.body[$X]
+          - pattern: request.cookies[$X]
+          - pattern: request.headers[$X]
+    pattern-sinks:
+      - pattern-either:
+          - pattern: $DB.query($Q, ...)
+          - pattern: $DB.execute($Q, ...)
+          - pattern: knex.raw($Q, ...)
+          - pattern: sequelize.query($Q, ...)
+          - pattern: prisma.$queryRawUnsafe($Q, ...)
+          - pattern: prisma.$executeRawUnsafe($Q, ...)
+          - pattern: mysql.query($Q, ...)
+          - pattern: pg.query($Q, ...)
+    pattern-sanitizers:
+      - pattern-either:
+          - pattern: mysql.escape($TAINT)
+          - pattern: pg.escapeLiteral($TAINT)
+          - pattern: validator.escape($TAINT)
+          - pattern: escape($TAINT)
+    pattern-not:
+      - pattern-either:
+          - pattern: $DB.query($Q, $PARAMS)
+          - pattern: sequelize.query($Q, $PARAMS)
+          - pattern: prisma.$queryRaw($Q, ...)
+    pattern-propagators:
+      - pattern: $STR += $TAINT
+        from: $TAINT
+        to: $STR
+    options:
+      taint_assume_safe_booleans: true
+      taint_assume_safe_numbers: true
+      taint_assume_safe_functions: true
+
+  - id: sql-injection-taint-py
+    severity: ERROR
+    message: "SQL injection — untrusted data flows into a SQL execution sink (Python)."
+    languages: [python]
+    mode: taint
+    pattern-sources:
+      - pattern-either:
+          - pattern: request.args[$X]
+          - pattern: request.form[$X]
+          - pattern: request.values[$X]
+          - pattern: request.cookies[$X]
+          - pattern: request.headers[$X]
+          - pattern: request.GET[$X]
+          - pattern: request.POST[$X]
+    pattern-sinks:
+      - pattern-either:
+          - pattern: $CUR.execute($Q, ...)
+          - pattern: $CONN.execute($Q, ...)
+          - pattern: session.execute($Q, ...)
+          - pattern: text($Q)
+          - pattern: psycopg2.execute($Q, ...)
+          - pattern: mysql.connector.execute($Q, ...)
+    pattern-sanitizers:
+      - pattern-either:
+          - pattern: pymysql.escape_string($TAINT)
+          - pattern: psycopg2.extensions.quote_ident($TAINT)
+          - pattern: escape($TAINT)
+    pattern-not:
+      - pattern-either:
+          - pattern: $CUR.execute($Q, $PARAMS)
+          - pattern: session.execute($Q, $PARAMS)
+    pattern-propagators:
+      - pattern: $STR = $STR + $TAINT
+        from: $TAINT
+        to: $STR
+    options:
+      taint_assume_safe_booleans: true
+      taint_assume_safe_numbers: true
+
+  - id: sql-injection-taint-php
+    severity: ERROR
+    message: "SQL injection — untrusted data flows into a SQL execution sink (PHP)."
+    languages: [php]
+    mode: taint
+    pattern-sources:
+      - pattern-either:
+          - pattern: $_GET[$X]
+          - pattern: $_POST[$X]
+          - pattern: $_REQUEST[$X]
+          - pattern: $_COOKIE[$X]
+          - pattern: $_SERVER['HTTP_...'][$X]
+    pattern-sinks:
+      - pattern-either:
+          - pattern: mysqli_query($CONN, $Q)
+          - pattern: $PDO->query($Q)
+          - pattern: $PDO->exec($Q)
+          - pattern: mysql_query($Q)
+    pattern-sanitizers:
+      - pattern-either:
+          - pattern: mysqli_real_escape_string($CONN, $TAINT)
+          - pattern: $PDO->quote($TAINT)
+          - pattern: htmlspecialchars($TAINT, ...)
+    pattern-not:
+      - pattern-either:
+          - pattern: $STMT = $PDO->prepare($Q)
+          - pattern: $STMT->execute($PARAMS)
+    options:
+      taint_assume_safe_booleans: true
+      taint_assume_safe_numbers: true
+
+  - id: sql-injection-taint-rb
+    severity: ERROR
+    message: "SQL injection — untrusted data flows into a SQL execution sink (Ruby)."
+    languages: [ruby]
+    mode: taint
+    pattern-sources:
+      - pattern-either:
+          - pattern: params[$X]
+          - pattern: cookies[$X]
+          - pattern: request.headers[$X]
+    pattern-sinks:
+      - pattern-either:
+          - pattern: ActiveRecord::Base.connection.execute($Q)
+          - pattern: ActiveRecord::Base.connection.exec_query($Q)
+          - pattern: $MODEL.find_by_sql($Q)
+          - pattern: $MODEL.exec($Q)
+    pattern-sanitizers:
+      - pattern-either:
+          - pattern: ActiveRecord::Base.sanitize_sql($TAINT)
+          - pattern: ActiveRecord::Base.sanitize_sql_array([$Q, $TAINT])
+    pattern-propagators:
+      - pattern: $STR << $TAINT
+        from: $TAINT
+        to: $STR
+    options:
+      taint_assume_safe_booleans: true
+      taint_assume_safe_numbers: true
+
+  - id: sql-injection-taint-go
+    severity: ERROR
+    message: "SQL injection — untrusted data flows into a SQL execution sink (Go)."
+    languages: [go]
+    mode: taint
+    pattern-sources:
+      - pattern-either:
+          - pattern: $REQ.URL.Query().Get($K)
+          - pattern: $REQ.Header.Get($K)
+          - pattern: $REQ.Cookie($K)
+          - pattern: $REQ.FormValue($K)
+    pattern-sinks:
+      - pattern-either:
+          - pattern: $DB.Query($Q, ...)
+          - pattern: $DB.Exec($Q, ...)
+          - pattern: $DB.QueryRow($Q, ...)
+    pattern-sanitizers:
+      - pattern: fmt.Sprintf("%q", $TAINT)
+    pattern-not:
+      - pattern-either:
+          - pattern: $DB.Query($Q, $PARAMS...)
+          - pattern: $DB.Exec($Q, $PARAMS...)
+    pattern-propagators:
+      - pattern: $STR = $STR + $TAINT
+        from: $TAINT
+        to: $STR
+    options:
+      taint_assume_safe_booleans: true
+      taint_assume_safe_numbers: true
+      taint_only_propagate_through_assignments: true
+
+  # NOTE (multi_sast import fix): the original sinks embedded a multi-line
+  # pattern binding $QUERY on a following line — Semgrep's Java parser rejects
+  # that shape. Rewritten as a plain source→sink taint against the direct
+  # sinks; the sanitizers + propagators still express the intended safe path.
+  - id: sql-injection-taint-java
+    severity: ERROR
+    message: "SQL injection — untrusted data flows into a SQL execution sink (Java)."
+    languages: [java]
+    mode: taint
+    pattern-sources:
+      - pattern-either:
+          - pattern: HttpServletRequest.getParameter($X)
+          - pattern: $METHOD.getParameter($X)
+          - pattern: HttpServletRequest.getHeader($X)
+          - pattern: HttpServletRequest.getCookies()[$X]
+          - pattern: $REQ.getParameter($X)
+          - pattern: $REQ.getHeader($X)
+    pattern-sinks:
+      - pattern-either:
+          - pattern: $STMT.executeQuery($QUERY)
+          - pattern: $STMT.executeUpdate($QUERY)
+          - pattern: $CONN.createStatement().execute($QUERY)
+          - pattern: $CONN.prepareStatement($QUERY)
+          - pattern: $EM.createNativeQuery($QUERY, ...)
+          - pattern: $EM.createQuery($QUERY, ...)
+    pattern-sanitizers:
+      - pattern-either:
+          - pattern: $PSTMT.setString(..., $TAINT)
+          - pattern: $PSTMT.setInt(..., $TAINT)
+          - pattern: StringEscapeUtils.escapeSql($TAINT)
+    pattern-propagators:
+      - pattern: $SB.append($TAINT)
+        from: $TAINT
+        to: $SB
+      - pattern: $STR = $STR + $TAINT
+        from: $TAINT
+        to: $STR
+    options:
+      taint_assume_safe_booleans: true
+      taint_assume_safe_numbers: true
+
+  - id: sql-injection-taint-kotlin
+    severity: ERROR
+    message: "SQL injection — untrusted data flows into a SQL execution sink (Kotlin)."
+    languages: [kotlin]
+    mode: taint
+    pattern-sources:
+      - pattern-either:
+          - pattern: getParameter($X)
+          - pattern: getHeader($X)
+          - pattern: getCookie($X)
+    pattern-sinks:
+      - pattern-either:
+          - pattern: |
+              $STMT.executeQuery("...$VAR...")
+          - pattern: |
+              $STMT.executeUpdate("...$VAR...")
+          - pattern: $CONN.createStatement().execute("...$VAR...")
+    pattern-sanitizers:
+      - pattern-either:
+          - pattern: $PSTMT.setString(..., $TAINT)
+          - pattern: $PSTMT.setInt(..., $TAINT)
+          - pattern: escapeSql($TAINT)
+    pattern-not:
+      - pattern: |
+          $PSTMT.executeQuery()
+    pattern-propagators:
+      - pattern: $SB.append($TAINT)
+        from: $TAINT
+        to: $SB
+    options:
+      taint_assume_safe_booleans: true
+      taint_assume_safe_numbers: true
+
+  - id: sql-injection-taint-swift
+    severity: ERROR
+    message: "SQL injection — untrusted data flows into a SQL execution sink (Swift)."
+    languages: [swift]
+    mode: taint
+    pattern-sources:
+      - pattern-either:
+          - pattern: url.queryParameters[$X]
+          - pattern: request.headers[$X]
+          - pattern: request.cookies[$X]
+    pattern-sinks:
+      - pattern-either:
+          - pattern: |
+              sqlite3_exec($DB, "..." + $VAR + "...")
+          - pattern: |
+              db.query("..." + $VAR + "...")
+          - pattern: FMResultSet.executeQuery("..." + $VAR + "...")
+    pattern-sanitizers:
+      - pattern-either:
+          - pattern: sqlite3_bind_text($STMT, ..., $TAINT, ...)
+          - pattern: escape($TAINT)
+    pattern-not:
+      - pattern-either:
+          - pattern: sqlite3_prepare_v2($DB, $Q, ..., $STMT)
+          - pattern: sqlite3_bind_text($STMT, ..., $PARAM)
+    pattern-propagators:
+      - pattern: $STR += $TAINT
+        from: $TAINT
+        to: $STR
+    options:
+      taint_assume_safe_booleans: true
+      taint_assume_safe_numbers: true

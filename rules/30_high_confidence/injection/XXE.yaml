@@ -1,0 +1,17 @@
+rules:
+  - id: xxe-python-unsafe-parse
+    severity: ERROR
+    message: XML external entity parsing via lxml.etree.parse (disable external entities).
+    languages: [python]
+    patterns:
+      - pattern-either:
+          - pattern: lxml.etree.parse($X)
+          - pattern: lxml.etree.fromstring($X)
+
+  - id: xxe-php-domdocument-simplexml
+    severity: ERROR
+    message: XML external entity parsing in PHP (DOMDocument/SimpleXML).
+    languages: [php]
+    pattern-either:
+      - pattern: $DOC->loadXML($X)
+      - pattern: simplexml_load_string($X)

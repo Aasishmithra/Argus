@@ -1,0 +1,18 @@
+rules:
+  - id: python-subprocess-shell-user-input
+    severity: ERROR
+    message: User-sourced data passed to subprocess with shell=True.
+    languages: [python]
+    mode: taint
+    pattern-sources:
+      - pattern-either:
+          - pattern: request.args[$X]
+          - pattern: request.form[$X]
+          - pattern: input(...)
+    pattern-sinks:
+      - pattern-either:
+          - pattern: subprocess.run($C, shell=True, ...)
+          - pattern: subprocess.Popen($C, shell=True, ...)
+    metadata:
+      cwe: "CWE-78"
+      confidence: HIGH

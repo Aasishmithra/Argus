@@ -1,0 +1,18 @@
+rules:
+  - id: express-route-missing-auth-middleware
+    severity: WARNING
+    message: Express route without apparent authorization middleware.
+    languages: [javascript, typescript]
+    patterns:
+      - pattern: |
+          $APP.$METHOD($ROUTE, ($REQ, $RES, $NEXT) => {
+            ...
+          })
+      - metavariable-regex:
+          metavariable: $METHOD
+          regex: (get|post|put|delete|patch|options)
+    pattern-not:
+      - pattern-regex: (?s)$APP\.$METHOD\(\s*$ROUTE\s*,\s*(auth|authorize|ensureAuth)
+    metadata:
+      cwe: "CWE-862"
+      confidence: MEDIUM

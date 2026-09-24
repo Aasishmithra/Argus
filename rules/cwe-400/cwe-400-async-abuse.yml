@@ -1,0 +1,14 @@
+rules:
+- id: cwe-400-unbounded-async
+  patterns:
+    - pattern: |
+        for (...) {
+          $ASYNC_FN(...);
+        }
+  languages: [javascript, typescript, java, kotlin, go]
+  message: |
+    Spawning async operations inside a loop without limit may cause uncontrolled resource usage (CWE-400).
+  severity: WARNING
+  metadata:
+    cwe: "CWE-400"
+    category: "Denial of Service"

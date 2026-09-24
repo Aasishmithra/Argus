@@ -1,0 +1,9 @@
+rules:
+  - id: bash-unquoted-env-var
+    severity: WARNING
+    message: Unquoted environment variable in shell script (globbing/whitespace risk).
+    languages: [bash]
+    pattern-regex: \$[A-Za-z_][A-Za-z0-9_]*\s
+    metadata:
+      cwe: "CWE-838"
+      confidence: MEDIUM

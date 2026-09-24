@@ -1,0 +1,9 @@
+rules:
+  - id: iam-policy-wildcard
+    severity: ERROR
+    message: IAM policy allows wildcard actions or resources.
+    languages: [json, yaml, hcl]
+    pattern-regex: (?s)"Action"\s*:\s*"(\*|iam:\*)"|"Resource"\s*:\s*"\*"
+    metadata:
+      cwe: "CWE-732"
+      confidence: HIGH

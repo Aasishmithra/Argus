@@ -1,0 +1,11 @@
+rules:
+- id: cwe-400-redos
+  pattern-regex: |
+    /(a+)+/
+  languages: [javascript, typescript, java, kotlin]
+  message: |
+    Potential ReDoS vulnerability (CWE-400): nested quantifiers can lead to catastrophic backtracking.
+  severity: WARNING
+  metadata:
+    cwe: "CWE-400"
+    category: "Regular Expression DoS"

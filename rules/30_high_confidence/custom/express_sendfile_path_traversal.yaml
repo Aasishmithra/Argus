@@ -1,0 +1,15 @@
+rules:
+  - id: express-sendfile-path-traversal
+    severity: ERROR
+    message: Untrusted input used in res.sendFile path.
+    languages: [javascript, typescript]
+    mode: taint
+    pattern-sources:
+      - pattern-either:
+          - pattern: req.params[$X]
+          - pattern: req.query[$X]
+    pattern-sinks:
+      - pattern: res.sendFile($P, ...)
+    metadata:
+      cwe: "CWE-22"
+      confidence: HIGH

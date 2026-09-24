@@ -1,0 +1,54 @@
+# Java native serialization sink — ObjectInputStream.readObject on untrusted
+# bytes. Historically the highest-blast-radius Java bug class: ysoserial /
+# marshalsec produce polymorphic RCE payloads against classpaths containing
+# Commons-Collections, Spring, Groovy, JDK7u21, Hibernate, ...
+rules:
+  - id: java-objectinputstream-untrusted-readobject
+    languages: [java, kotlin]
+    severity: ERROR
+    mode: taint
+    message: |
+      ObjectInputStream.readObject() on data derived from an HTTP request is
+      a classic RCE sink. Serialized-Java payloads (ysoserial / marshalsec)
+      exploit gadget chains in Commons-Collections, Spring, Groovy, Hibernate
+      etc. that may be on the classpath transitively.
+
+      Fix: replace Java serialization with JSON / Protobuf / MessagePack. If
+      you must keep it, add an ObjectInputFilter (Java 9+) with a strict
+      allowlist of expected classes:
+        `ObjectInputFilter.allowFilter(cls -> ALLOWED.contains(cls.getName()), ObjectInputFilter.Status.REJECTED)`
+    metadata:
+      cwe: 'CWE-502: Deserialization of Untrusted Data'
+      owasp: 'A08:2021 Software and Data Integrity Failures'
+      category: security
+      confidence: HIGH
+      likelihood: MEDIUM
+      impact: HIGH
+    pattern-sources:
+      - pattern: $REQ.getInputStream()
+      - pattern: $REQ.getReader()
+      - pattern: $REQ.getParameter(...)
+      - pattern: '@RequestBody(...) $T $X'
+      - pattern: '@RequestParam(...) $T $X'
+      - pattern: '@javax.ws.rs.FormParam(...) $T $X'
+      - pattern: '@jakarta.ws.rs.FormParam(...) $T $X'
+      # Message queues (Kafka, RabbitMQ, JMS) also cross the trust boundary
+      - pattern: $RECORD.value()
+      - pattern: $MSG.getBody()
+    pattern-sinks:
+      - pattern-either:
+          - pattern: new ObjectInputStream($X).readObject()
+          - pattern: new ObjectInputStream($X).readObjectOverride()
+          - pattern: new ObjectInputStream($X).readUnshared()
+          # Locally-bound ObjectInputStream — semgrep resolves the binding
+          # and treats the .readObject() call as flowing from the constructor
+          # source via the local variable.
+          - pattern: |
+              ObjectInputStream $OIS = new ObjectInputStream($X);
+              $OIS.readObject();
+          - pattern: |
+              ObjectInputStream $OIS = new ObjectInputStream($X);
+              $OIS.readUnshared();
+    pattern-sanitizers:
+      - pattern: $OIS.setObjectInputFilter($F)
+      - pattern: ObjectInputFilter.Config.setSerialFilter($F)

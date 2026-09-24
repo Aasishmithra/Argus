@@ -1,0 +1,12 @@
+rules:
+  - id: jwt-none-alg
+    severity: ERROR
+    message: JWT 'none' algorithm or verification disabled.
+    languages: [javascript, typescript, python, php, ruby, java, kotlin]
+    pattern-either:
+      - pattern: |-
+          jwt.decode($T, verify=False, ...)
+      - pattern: |-
+          jwt.decode($T, ..., { algorithms: ["none"] })
+      - pattern: |-
+          jwt.verify($T, null, ...)

@@ -1,0 +1,35 @@
+# Jackson polymorphic deserialization with default typing enabled — allows
+# an attacker to embed a class name in JSON that Jackson will instantiate.
+# Same gadget-chain RCE as ObjectInputStream if the classpath has any of the
+# many known-vulnerable classes.
+rules:
+  - id: jackson-enable-default-typing
+    languages: [java, kotlin]
+    severity: ERROR
+    message: |
+      Jackson `enableDefaultTyping()` / `activateDefaultTyping()` on an
+      ObjectMapper deserializes polymorphic types by embedding class names in
+      the JSON payload (`{"@class": "...", ...}`). This is a well-known RCE
+      vector when the classpath includes gadget classes (Commons-Collections,
+      Spring, XBean, ...).
+
+      Fix: (1) remove the call — Jackson uses `@JsonTypeInfo(use = Id.NAME)`
+      with a `@JsonSubTypes` allowlist for safe polymorphism, (2) if
+      polymorphism is required, use a strict `PolymorphicTypeValidator` that
+      allows only your DTO base type.
+    metadata:
+      cwe: 'CWE-502: Deserialization of Untrusted Data'
+      owasp: 'A08:2021 Software and Data Integrity Failures'
+      category: security
+      confidence: HIGH
+      likelihood: HIGH
+      impact: HIGH
+      references:
+        - https://cowtowncoder.medium.com/on-jackson-cves-dont-panic-here-is-what-you-need-to-know-54cd0d6e8062
+    patterns:
+      - pattern-either:
+          - pattern: $MAPPER.enableDefaultTyping()
+          - pattern: $MAPPER.enableDefaultTyping(...)
+          - pattern: $MAPPER.activateDefaultTyping($VLD)
+          - pattern: $MAPPER.activateDefaultTyping($VLD, ...)
+          - pattern: $MAPPER.activateDefaultTypingAsProperty($VLD, ...)

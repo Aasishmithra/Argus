@@ -1,0 +1,27 @@
+rules:
+  # JS/TS rule
+  - id: insecure-tls-validation-js
+    severity: ERROR
+    message: Insecure TLS validation in Node.js (NODE_TLS_REJECT_UNAUTHORIZED).
+    languages: [javascript, typescript]
+    pattern: |-
+      process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0"
+
+  # Python rule
+  - id: insecure-tls-validation-py
+    severity: ERROR
+    message: Insecure TLS validation in Python requests (verify=False).
+    languages: [python]
+    pattern: |-
+      requests.$F($U, verify=False, ...)
+
+  # Go rule
+  - id: insecure-tls-validation-go
+    severity: ERROR
+    message: Insecure TLS validation in Go (tls.Config with InsecureSkipVerify).
+    languages: [go]
+    pattern-either:
+      - pattern: |-
+          tls.Config{ InsecureSkipVerify: true, ... }
+      - pattern: |-
+          &tls.Config{ InsecureSkipVerify: true, ... }

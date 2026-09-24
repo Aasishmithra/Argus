@@ -1,0 +1,44 @@
+# Unsafe reflection — user-controlled class name flows into Class.forName /
+# newInstance. Allows an attacker to instantiate arbitrary classes on the
+# classpath. Gadget classes (Commons-Collections InvokerTransformer etc.)
+# turn this into full RCE.
+rules:
+  - id: unsafe-reflection-class-forname
+    languages: [java, kotlin]
+    severity: ERROR
+    mode: taint
+    message: |
+      Untrusted input is used as the class name for reflection. `Class.forName`
+      / `getDeclaredConstructor().newInstance()` on attacker-controlled strings
+      lets them instantiate any class on the classpath. If a gadget class
+      (Commons-Collections, Spring, Groovy, etc.) is present, this is RCE.
+
+      Fix: strict allowlist of permitted class names; better, replace
+      reflection-based dispatch with a switch or a Map<String, Supplier<T>>.
+    metadata:
+      cwe: 'CWE-470: Use of Externally-Controlled Input to Select Classes'
+      owasp: 'A08:2021 Software and Data Integrity Failures'
+      category: security
+      confidence: HIGH
+      likelihood: MEDIUM
+      impact: HIGH
+    pattern-sources:
+      - pattern: $REQ.getParameter(...)
+      - pattern: $REQ.getHeader(...)
+      - pattern: $REQ.getInputStream()
+      - pattern: '@RequestParam(...) $T $X'
+      - pattern: '@RequestBody(...) $T $X'
+      - pattern: '@PathVariable(...) $T $X'
+      - pattern: '@javax.ws.rs.QueryParam(...) $T $X'
+      - pattern: '@javax.ws.rs.PathParam(...) $T $X'
+      - pattern: '@jakarta.ws.rs.QueryParam(...) $T $X'
+      - pattern: '@jakarta.ws.rs.PathParam(...) $T $X'
+    pattern-sinks:
+      - pattern-either:
+          - pattern: Class.forName($X)
+          - pattern: Class.forName($X, ...)
+          - pattern: Class.forName($X).newInstance()
+          - pattern: Class.forName($X).getDeclaredConstructor().newInstance(...)
+          - pattern: Class.forName($X).getConstructor(...).newInstance(...)
+          - pattern: $LOADER.loadClass($X)
+          - pattern: $LOADER.loadClass($X).newInstance()

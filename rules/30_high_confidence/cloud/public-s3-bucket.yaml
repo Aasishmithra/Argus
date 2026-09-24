@@ -1,0 +1,11 @@
+rules:
+  - id: public-s3-bucket
+    severity: ERROR
+    message: Public S3 bucket (anonymous read/write) detected.
+    languages: [hcl, json, yaml]
+    pattern-either:
+      - pattern-regex: (?s)aws_s3_bucket_policy[^{]*\{[^}]*"Principal"\s*:\s*\*[^}]*\}
+      - pattern-regex: (?is)"Effect"\s*:\s*"Allow"[^}]*"Principal"\s*:\s*\*[^}]*"Action"\s*:\s*"(s3:PutObject|s3:GetObject)"
+    metadata:
+      cwe: "CWE-284"
+      confidence: HIGH

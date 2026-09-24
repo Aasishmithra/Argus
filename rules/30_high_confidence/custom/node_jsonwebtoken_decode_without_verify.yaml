@@ -1,0 +1,9 @@
+rules:
+  - id: node-jwt-decode-without-verify
+    severity: ERROR
+    message: jsonwebtoken decoded without verification.
+    languages: [javascript, typescript]
+    pattern: jwt.decode($T, ...)
+    metadata:
+      cwe: "CWE-345"
+      confidence: HIGH

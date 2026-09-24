@@ -1,0 +1,89 @@
+# JWT signature verification explicitly skipped — every JWT library has an
+# "unsafe decode" that returns the payload WITHOUT verifying the signature.
+# When used on tokens received from users, the server trusts arbitrary
+# attacker-supplied claims. Split into per-language rules so semgrep's
+# per-target parser doesn't reject language-specific syntax.
+rules:
+  - id: jwt-decode-without-verification-python
+    languages: [python]
+    severity: ERROR
+    message: |
+      JWT decoded WITHOUT signature verification (PyJWT / python-jose). The
+      server will trust any claims (`sub`, `role`, `iss`, ...) an attacker
+      chooses. Fix: `jwt.decode(token, key=SECRET, algorithms=['HS256'])`.
+      Never use `get_unverified_claims`/`get_unverified_header`/
+      `options={"verify_signature": False}` on tokens from users.
+    metadata:
+      cwe: 'CWE-347: Improper Verification of Cryptographic Signature'
+      owasp: 'A02:2021 Cryptographic Failures'
+      category: security
+      confidence: HIGH
+    patterns:
+      - pattern-either:
+          - pattern: 'jwt.decode($T, verify=False)'
+          - pattern: 'jwt.decode($T, options={"verify_signature": False})'
+          - pattern: 'jwt.decode($T, options={"verify_signature": False, ...})'
+          - pattern: jwt.get_unverified_header($T)
+          - pattern: jose.jwt.get_unverified_claims($T)
+          - pattern: jose.jwt.get_unverified_header($T)
+
+  - id: jwt-decode-without-verification-js
+    languages: [javascript, typescript]
+    severity: ERROR
+    message: |
+      JWT decoded WITHOUT verification (node-jsonwebtoken / jose). `jwt.decode`
+      is the unsafe form that only parses — it does NOT verify the signature.
+      Fix: `jwt.verify(token, secret, { algorithms: ['HS256'] })`.
+    metadata:
+      cwe: 'CWE-347'
+      owasp: 'A02:2021 Cryptographic Failures'
+      category: security
+      confidence: HIGH
+    patterns:
+      - pattern-either:
+          - pattern: jwt.decode($T)
+          - pattern: jwt.decode($T, $OPTS)
+          - pattern: jsonwebtoken.decode($T)
+          - pattern: jsonwebtoken.decode($T, $OPTS)
+
+  - id: jwt-decode-without-verification-java
+    languages: [java, kotlin]
+    severity: ERROR
+    message: |
+      JWT payload extracted WITHOUT signature verification (Nimbus / JJWT /
+      auth0/java-jwt). Fix: parse the token AND verify against the expected
+      signing key before trusting any claim. E.g. Nimbus:
+        `SignedJWT jwt = SignedJWT.parse(t); jwt.verify(new MACVerifier(k));`
+      JJWT:
+        `Jwts.parser().verifyWith(k).build().parseSignedClaims(t)`
+    metadata:
+      cwe: 'CWE-347'
+      owasp: 'A02:2021 Cryptographic Failures'
+      category: security
+      confidence: HIGH
+    patterns:
+      - pattern-either:
+          - pattern: SignedJWT.parse($T).getPayload()
+          - pattern: PlainJWT.parse($T).getPayload()
+          - pattern: JWT.decode($T)
+          - pattern: Jwts.parser().unsecured().build().parseClaimsJwt($T)
+
+  - id: jwt-decode-without-verification-go
+    languages: [go]
+    severity: ERROR
+    message: |
+      JWT parsed WITHOUT signature verification (golang-jwt). The `Parse(t,
+      nil)` / `ParseUnverified()` shape returns the claims without any
+      signature check. Fix: always pass a keyfunc that returns the signing
+      key: `jwt.Parse(t, func(*jwt.Token) (interface{}, error) { return
+      secret, nil })` and check the returned `.Valid` flag.
+    metadata:
+      cwe: 'CWE-347'
+      owasp: 'A02:2021 Cryptographic Failures'
+      category: security
+      confidence: HIGH
+    patterns:
+      - pattern-either:
+          - pattern: jwt.Parse($T, nil)
+          - pattern: jwt.ParseWithClaims($T, $CLAIMS, nil)
+          - pattern: new(jwt.Parser).ParseUnverified($T, ...)

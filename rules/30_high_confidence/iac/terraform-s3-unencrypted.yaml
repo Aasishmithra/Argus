@@ -1,0 +1,19 @@
+rules:
+  - id: tf-s3-unencrypted
+    severity: ERROR
+    message: Terraform S3 bucket without default encryption.
+    languages: [hcl]
+    patterns:
+      - pattern: |-
+          resource "aws_s3_bucket" $NAME {
+            ...
+          }
+    pattern-not:
+      - pattern: |-
+          resource "aws_s3_bucket" $NAME {
+            ...
+            server_side_encryption_configuration = ...
+          }
+    metadata:
+      cwe: "CWE-311"
+      confidence: HIGH

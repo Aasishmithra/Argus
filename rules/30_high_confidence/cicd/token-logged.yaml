@@ -1,0 +1,9 @@
+rules:
+  - id: token-logged
+    severity: ERROR
+    message: Sensitive token is being logged in CI/CD or scripts.
+    languages: [bash, javascript, typescript, python, ruby, php, go, java, kotlin]
+    pattern-regex: (?i)log(ger)?\.(info|debug|warn|error)\(.*(token|secret|password).*
+    metadata:
+      cwe: "CWE-532"
+      confidence: HIGH

@@ -1,0 +1,11 @@
+rules:
+  - id: yaml-load-unsafe
+    severity: ERROR
+    message: yaml.load used without SafeLoader.
+    languages: [python]
+    pattern: yaml.load($X)
+    pattern-not:
+      - pattern: yaml.load($X, Loader=yaml.SafeLoader)
+    metadata:
+      cwe: "CWE-502"
+      confidence: HIGH

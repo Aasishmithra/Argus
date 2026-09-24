@@ -1,0 +1,285 @@
+# Unrestricted / weakly-validated file upload — user's uploaded filename or
+# bytes reach a filesystem sink without an extension allowlist, MIME sniff
+# (with server-side detection, not header-based), or size limit.
+#
+# Attack shapes catches:
+#   * Executable content (.jsp, .php, .py, .sh) uploaded then served or exec'd
+#   * Path traversal in the filename (../../etc/passwd)
+#   * Content-Type spoofing (evil.php sent as image/jpeg)
+#   * SVG with embedded JavaScript (stored XSS)
+#
+# Rewritten 2026-09-23 from a 2-pattern PHP/Node-only version into a per-
+# language rulepack covering Java Spring / JAX-RS / Servlet, Python Flask /
+# Django / FastAPI, Node Express+Multer / Formidable, Go net/http.
+rules:
+  - id: unrestricted-file-upload-java-spring-multipart
+    languages: [java, kotlin]
+    severity: ERROR
+    message: |
+      Spring MultipartFile written to disk using the client-supplied filename
+      without validation. An attacker can supply `../../etc/cron.d/backdoor`
+      (path traversal), `shell.jsp` (executable if served), or
+      `image.jpg.php` (double-extension bypass).
+
+      Fix: (1) validate the extension against a strict allowlist
+      (`Set.of("jpg","jpeg","png","pdf")`), (2) generate the stored filename
+      server-side (UUID) so client input never becomes a path component,
+      (3) verify actual content via Apache Tika / server-side magic-byte
+      sniff (NEVER trust the Content-Type header), (4) cap file size upfront.
+    metadata:
+      cwe: 'CWE-434: Unrestricted Upload of File with Dangerous Type'
+      owasp: 'A04:2021 Insecure Design'
+      category: security
+      confidence: HIGH
+      likelihood: HIGH
+      impact: HIGH
+    patterns:
+      - pattern-either:
+          - pattern: $FILE.transferTo(new File($FILE.getOriginalFilename()))
+          - pattern: $FILE.transferTo(Paths.get($FILE.getOriginalFilename()))
+          - pattern: |
+              $NAME = $FILE.getOriginalFilename();
+              ...
+              $FILE.transferTo(new File($NAME));
+          - pattern: |
+              $NAME = $FILE.getOriginalFilename();
+              ...
+              Files.write(Paths.get($NAME), $FILE.getBytes());
+          - pattern: |
+              $NAME = $FILE.getOriginalFilename();
+              ...
+              Files.copy($FILE.getInputStream(), Paths.get($NAME));
+
+  - id: unrestricted-file-upload-java-jaxrs-part
+    languages: [java, kotlin]
+    severity: ERROR
+    message: |
+      JAX-RS Part / Servlet Part written to disk using client-supplied
+      filename. Same risks as Spring MultipartFile — see remediation on the
+      Spring rule.
+    metadata:
+      cwe: 'CWE-434'
+      owasp: 'A04:2021 Insecure Design'
+      category: security
+      confidence: HIGH
+    patterns:
+      - pattern-either:
+          - pattern: $PART.write($PART.getSubmittedFileName())
+          - pattern: |
+              $NAME = $PART.getSubmittedFileName();
+              ...
+              $PART.write($NAME);
+          - pattern: |
+              $NAME = $PART.getSubmittedFileName();
+              ...
+              Files.copy($PART.getInputStream(), Paths.get($NAME));
+
+  - id: unrestricted-file-upload-java-dropwizard-formdataparam
+    languages: [java, kotlin]
+    severity: ERROR
+    message: |
+      Dropwizard / Jersey @FormDataParam handler uses
+      FormDataContentDisposition.getFileName() as the disk target.
+      Client-supplied filename → path traversal / arbitrary content upload.
+
+      Fix: never use `getFileName()` as a path component. Generate a
+      server-side name (UUID) for storage, keep the client name in metadata
+      only. Also validate extension against an allowlist and enforce a size
+      limit on the input stream before draining it.
+    metadata:
+      cwe: 'CWE-434'
+      owasp: 'A04:2021 Insecure Design'
+      category: security
+      confidence: HIGH
+    patterns:
+      - pattern-either:
+          # FormDataContentDisposition.getFileName() flowing to file/path sink
+          - pattern: |
+              $DISP.getFileName();
+              ...
+              Files.copy($STREAM, Paths.get($DISP.getFileName()));
+          - pattern: |
+              $NAME = $DISP.getFileName();
+              ...
+              Files.copy($STREAM, Paths.get($NAME));
+          - pattern: |
+              $NAME = $DISP.getFileName();
+              ...
+              new File($NAME);
+          - pattern: |
+              $NAME = $DISP.getFileName();
+              ...
+              new FileOutputStream($NAME);
+          # Raw @FormDataParam InputStream drained to disk with user-derived
+          # target path — the classic "InputStream in, os.copy() out" shape.
+          - pattern: |
+              $NAME = $DISP.getFileName();
+              ...
+              IOUtils.copy($STREAM, new FileOutputStream($NAME));
+
+  - id: unrestricted-file-upload-python-flask-save-no-sanitize
+    languages: [python]
+    severity: ERROR
+    message: |
+      Flask request.files[...].save() called with the user-supplied filename
+      as the destination path. Path traversal and executable-content risk.
+
+      Fix: sanitize with werkzeug.utils.secure_filename() FIRST, then join
+      onto a fixed upload dir, then check the extension against an
+      allowlist. Better: replace the filename entirely with a server-side
+      UUID and store the original name in metadata only.
+        `from werkzeug.utils import secure_filename`
+        `fname = secure_filename(file.filename)`
+        `if not allowed_ext(fname): abort(400)`
+        `file.save(os.path.join(UPLOAD_DIR, fname))`
+    metadata:
+      cwe: 'CWE-434'
+      owasp: 'A04:2021 Insecure Design'
+      category: security
+      confidence: HIGH
+    patterns:
+      - pattern-either:
+          - pattern: request.files[$K].save(request.files[$K].filename)
+          - pattern: $F.save($F.filename)
+          - pattern: |
+              $F = request.files[$K]
+              ...
+              $F.save($F.filename)
+          - pattern: |
+              $F = request.files[$K]
+              ...
+              $F.save(os.path.join($DIR, $F.filename))
+      # secure_filename() called anywhere near the save is treated as
+      # sanitized. Without taint mode we can't do proper sanitizer semantics,
+      # so pattern-not-inside catches the common shape where sanitization
+      # and save appear in the same function body.
+      - pattern-not-inside: |
+          $F = request.files[$K]
+          ...
+          secure_filename(...)
+
+  - id: unrestricted-file-upload-python-django-open
+    languages: [python]
+    severity: ERROR
+    message: |
+      Django request.FILES[...] opened / written using the client-supplied
+      name. Path traversal + executable-content risk.
+
+      Fix: never use file.name as a path — Django's FileSystemStorage
+      generates safe names by default. If you must use the client name,
+      strip it with `os.path.basename()` and validate the extension.
+    metadata:
+      cwe: 'CWE-434'
+      owasp: 'A04:2021 Insecure Design'
+      category: security
+      confidence: MEDIUM
+    patterns:
+      - pattern-either:
+          - pattern: |
+              $F = request.FILES[$K]
+              ...
+              open($F.name, ...)
+          - pattern: |
+              $F = request.FILES[$K]
+              ...
+              with open($F.name, ...) as $H:
+                  ...
+
+  - id: unrestricted-file-upload-node-multer-no-filter
+    languages: [javascript, typescript]
+    severity: ERROR
+    message: |
+      Multer configured without a `fileFilter` and without `limits.fileSize`.
+      Any file, any size, any extension. Combined with `originalname` used
+      as the storage filename, this is trivially exploitable.
+
+      Fix: pass `fileFilter: (req, file, cb) => { const ok = ALLOWED.has(
+      path.extname(file.originalname).toLowerCase()); cb(null, ok); }` AND
+      `limits: { fileSize: 5 * 1024 * 1024 }` AND use `filename: (req, file,
+      cb) => cb(null, crypto.randomBytes(16).toString('hex'))` in storage.
+    metadata:
+      cwe: 'CWE-434'
+      owasp: 'A04:2021 Insecure Design'
+      category: security
+      confidence: MEDIUM
+    patterns:
+      - pattern-either:
+          - pattern: 'multer({dest: $D})'
+          - pattern: 'multer({storage: $S})'
+      - pattern-not: 'multer({..., fileFilter: ..., ...})'
+      - pattern-not: 'multer({..., limits: {..., fileSize: ..., ...}, ...})'
+
+  - id: unrestricted-file-upload-node-express-originalname
+    languages: [javascript, typescript]
+    severity: ERROR
+    message: |
+      Express/Multer file written to disk using `req.file.originalname` or
+      `req.files[...].name` as the target path. Path traversal + executable-
+      content risk.
+    metadata:
+      cwe: 'CWE-434'
+      owasp: 'A04:2021 Insecure Design'
+      category: security
+      confidence: HIGH
+    patterns:
+      - pattern-either:
+          - pattern: fs.writeFile($PATH, req.file.buffer, ...)
+          - pattern: fs.writeFileSync($PATH, req.file.buffer)
+          - pattern: fs.writeFile(req.file.originalname, ...)
+          - pattern: fs.rename(req.file.path, req.file.originalname)
+          - pattern: fs.rename(req.file.path, $DIR + req.file.originalname)
+          - pattern: fs.rename(req.file.path, path.join($DIR, req.file.originalname))
+
+  - id: unrestricted-file-upload-go-formfile
+    languages: [go]
+    severity: ERROR
+    message: |
+      Go multipart upload writes the client-supplied filename directly to
+      disk. `os.Create(header.Filename)` allows path traversal
+      (`../../etc/passwd`) and executable-content upload.
+
+      Fix: generate a server-side name (`uuid.New().String()`), verify
+      extension against an allowlist (`filepath.Ext(header.Filename)` in a
+      known-good set), enforce `r.ParseMultipartForm(maxMemory)` with a
+      cap, use `filepath.Clean()` + prefix-check to keep the final path
+      inside your upload dir.
+    metadata:
+      cwe: 'CWE-434'
+      owasp: 'A04:2021 Insecure Design'
+      category: security
+      confidence: HIGH
+    patterns:
+      - pattern-either:
+          - pattern: os.Create($HEADER.Filename)
+          - pattern: os.OpenFile($HEADER.Filename, ...)
+          - pattern: |
+              $NAME := $HEADER.Filename
+              ...
+              os.Create($NAME)
+          - pattern: |
+              $NAME := $HEADER.Filename
+              ...
+              os.OpenFile($NAME, ...)
+          - pattern: ioutil.WriteFile($HEADER.Filename, $BODY, $PERM)
+
+  - id: unrestricted-file-upload-php-move
+    languages: [php]
+    severity: ERROR
+    message: |
+      PHP move_uploaded_file using client-supplied $_FILES['x']['name'] as
+      destination allows path traversal + arbitrary PHP file placement in
+      web-served dirs.
+
+      Fix: `basename($_FILES['x']['name'])` to strip path components, then
+      `pathinfo($name, PATHINFO_EXTENSION)` against an allowlist, then
+      random filename via `bin2hex(random_bytes(16))`.
+    metadata:
+      cwe: 'CWE-434'
+      owasp: 'A04:2021 Insecure Design'
+      category: security
+      confidence: HIGH
+    patterns:
+      - pattern-either:
+          - pattern: move_uploaded_file($_FILES[$K]['tmp_name'], $_FILES[$K]['name'])
+          - pattern: move_uploaded_file($TMP, $_FILES[$K]['name'])
+          - pattern: move_uploaded_file($TMP, $DIR . $_FILES[$K]['name'])

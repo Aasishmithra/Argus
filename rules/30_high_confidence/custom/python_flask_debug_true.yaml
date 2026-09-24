@@ -1,0 +1,9 @@
+rules:
+  - id: flask-debug-true
+    severity: ERROR
+    message: Flask app runs with debug=True (do not use in production).
+    languages: [python]
+    pattern: app.run(..., debug=True, ...)
+    metadata:
+      cwe: "CWE-489"
+      confidence: HIGH

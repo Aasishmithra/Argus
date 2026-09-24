@@ -1,0 +1,94 @@
+# XXE (XML External Entity) — Java XML parsers with default configuration.
+# The default settings for DocumentBuilderFactory, SAXParserFactory,
+# XMLInputFactory, TransformerFactory, SchemaFactory and Unmarshaller ALL
+# resolve external entities unless explicitly disabled. Attacker XML then
+# reads arbitrary files, causes SSRF, or triggers "billion laughs" DoS.
+rules:
+  - id: xxe-java-documentbuilder-unsafe-default
+    languages: [java, kotlin]
+    severity: ERROR
+    message: |
+      DocumentBuilderFactory used without disabling DOCTYPE and external
+      entities. Default configuration is vulnerable to XXE — attacker XML
+      can read arbitrary files (`<!ENTITY x SYSTEM "file:///etc/passwd">`),
+      trigger SSRF (`SYSTEM "http://internal/x"`), or DoS via "billion
+      laughs".
+
+      Fix: before creating the builder, set:
+        `dbf.setFeature("http://apache.org/xml/features/disallow-doctype-decl", true);`
+      OR OWASP-recommended combination:
+        `dbf.setFeature(XMLConstants.FEATURE_SECURE_PROCESSING, true);`
+        `dbf.setFeature("http://xml.org/sax/features/external-general-entities", false);`
+        `dbf.setFeature("http://xml.org/sax/features/external-parameter-entities", false);`
+        `dbf.setXIncludeAware(false);`
+        `dbf.setExpandEntityReferences(false);`
+    metadata:
+      cwe: 'CWE-611: Improper Restriction of XML External Entity Reference'
+      owasp: 'A05:2021 Security Misconfiguration'
+      category: security
+      confidence: MEDIUM
+      likelihood: MEDIUM
+      impact: HIGH
+      references:
+        - https://cheatsheetseries.owasp.org/cheatsheets/XML_External_Entity_Prevention_Cheat_Sheet.html
+    patterns:
+      - pattern-either:
+          - pattern: DocumentBuilderFactory.newInstance().newDocumentBuilder().parse(...)
+          - pattern: |
+              DocumentBuilderFactory $DBF = DocumentBuilderFactory.newInstance();
+              ...
+              $DBF.newDocumentBuilder().parse(...);
+      - pattern-not-inside: |
+          $DBF.setFeature("http://apache.org/xml/features/disallow-doctype-decl", true);
+          ...
+      - pattern-not-inside: |
+          $DBF.setFeature(XMLConstants.FEATURE_SECURE_PROCESSING, true);
+          ...
+
+  - id: xxe-java-saxparser-unsafe-default
+    languages: [java, kotlin]
+    severity: ERROR
+    message: |
+      SAXParserFactory used without secure processing. Same XXE risks as
+      DocumentBuilderFactory. Fix:
+        `spf.setFeature("http://apache.org/xml/features/disallow-doctype-decl", true);`
+    metadata:
+      cwe: 'CWE-611'
+      owasp: 'A05:2021 Security Misconfiguration'
+      confidence: MEDIUM
+    patterns:
+      - pattern-either:
+          - pattern: SAXParserFactory.newInstance().newSAXParser().parse(...)
+          - pattern: |
+              SAXParserFactory $SPF = SAXParserFactory.newInstance();
+              ...
+              $SPF.newSAXParser().parse(...);
+      - pattern-not-inside: |
+          $SPF.setFeature("http://apache.org/xml/features/disallow-doctype-decl", true);
+          ...
+
+  - id: xxe-java-xmlinputfactory-unsafe-default
+    languages: [java, kotlin]
+    severity: ERROR
+    message: |
+      XMLInputFactory (StAX) used without disabling DTD support. Fix:
+        `xif.setProperty(XMLInputFactory.SUPPORT_DTD, false);`
+        `xif.setProperty("javax.xml.stream.isSupportingExternalEntities", false);`
+    metadata:
+      cwe: 'CWE-611'
+      owasp: 'A05:2021 Security Misconfiguration'
+      confidence: MEDIUM
+    patterns:
+      - pattern-either:
+          - pattern: XMLInputFactory.newInstance().createXMLStreamReader(...)
+          - pattern: XMLInputFactory.newFactory().createXMLStreamReader(...)
+          - pattern: |
+              XMLInputFactory $XIF = XMLInputFactory.newInstance();
+              ...
+              $XIF.createXMLStreamReader(...);
+      - pattern-not-inside: |
+          $XIF.setProperty(XMLInputFactory.SUPPORT_DTD, false);
+          ...
+      - pattern-not-inside: |
+          $XIF.setProperty("javax.xml.stream.isSupportingExternalEntities", false);
+          ...

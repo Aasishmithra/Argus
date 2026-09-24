@@ -1,0 +1,13 @@
+rules:
+  - id: insecure-deserialization
+    severity: ERROR
+    message: Insecure deserialization function used.
+    languages: [python, php, ruby, java, kotlin]
+    patterns:
+      - pattern-either:
+          - pattern: pickle.loads($X)
+          - pattern: unserialize($X)
+          - pattern: Marshal.load($X)
+    metadata:
+      cwe: "CWE-502"
+      confidence: HIGH

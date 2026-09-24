@@ -1,0 +1,51 @@
+# Spring Expression Language (SpEL) injection — attacker-controlled string
+# passed to a SpEL parser gives arbitrary Java expression evaluation, which
+# maps to `T(java.lang.Runtime).getRuntime().exec(...)` -> RCE. This is the
+# class behind CVE-2022-22963 (Spring Cloud Function) and Spring4Shell.
+rules:
+  - id: spring-spel-tainted-input
+    languages: [java, kotlin]
+    severity: ERROR
+    mode: taint
+    message: |
+      Spring Expression Language (SpEL) evaluates arbitrary expressions and,
+      when fed untrusted input, allows RCE via
+      `T(java.lang.Runtime).getRuntime().exec(...)` or reflection into
+      arbitrary classes. Fix: don't evaluate user input as SpEL — resolve
+      the expression at build time with a constant, or use a strict
+      SimpleEvaluationContext and validate input against an allowlist.
+    metadata:
+      cwe: 'CWE-94: Improper Control of Generation of Code'
+      owasp: 'A03:2021 Injection'
+      category: security
+      confidence: HIGH
+      likelihood: MEDIUM
+      impact: HIGH
+      references:
+        - https://nvd.nist.gov/vuln/detail/CVE-2022-22963
+        - https://docs.spring.io/spring-framework/docs/current/reference/html/core.html#expressions
+    pattern-sources:
+      - pattern: $REQ.getParameter(...)
+      - pattern: $REQ.getHeader(...)
+      - pattern: $REQ.getInputStream()
+      - pattern: '@RequestParam(...) $T $X'
+      - pattern: '@RequestHeader(...) $T $X'
+      - pattern: '@RequestBody(...) $T $X'
+      - pattern: '@PathVariable(...) $T $X'
+      - pattern: '@ModelAttribute(...) $T $X'
+      - pattern: '@javax.ws.rs.QueryParam(...) $T $X'
+      - pattern: '@javax.ws.rs.PathParam(...) $T $X'
+      - pattern: '@jakarta.ws.rs.QueryParam(...) $T $X'
+    pattern-sinks:
+      - pattern-either:
+          - pattern: new SpelExpressionParser().parseExpression($X)
+          - pattern: $PARSER.parseExpression($X)
+          - pattern: $PARSER.parseExpression($X, $CTX)
+          - pattern: $PARSER.parseExpression($X, ...).getValue(...)
+          - pattern: $EXPR.getValue($CTX, $X)
+          - pattern: |
+              SpelExpressionParser $P = new SpelExpressionParser();
+              $P.parseExpression($X);
+    pattern-sanitizers:
+      - pattern: SimpleEvaluationContext.forReadOnlyDataBinding()
+      - pattern: SimpleEvaluationContext.forPropertyAccessors($X)
