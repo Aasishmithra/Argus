@@ -1,0 +1,28 @@
+rules:
+  - id: insecure-crypto-algorithm
+    patterns:
+      - pattern: CCCryptorCreate(..., kCCAlgorithmRC4, ...)
+    message: "Insecure cryptographic algorithm RC4 detected."
+    languages: [swift]
+    severity: WARNING
+
+  - id: hardcoded-crypto-key
+    patterns:
+      - pattern: let $KEY = "..."
+    message: "Hardcoded cryptographic key detected."
+    languages: [swift]
+    severity: WARNING
+
+  - id: insecure-key-management
+    patterns:
+      - pattern: CCCryptorCreate(..., ..., ..., $KEY, ...)
+    message: "Potentially insecure key management detected."
+    languages: [swift]
+    severity: WARNING
+
+  - id: insecure-randomness
+    patterns:
+      - pattern: arc4random()
+    message: "Insecure random number generator detected. Consider using SecRandomCopyBytes."
+    languages: [swift]
+    severity: WARNING

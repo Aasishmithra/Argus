@@ -1,0 +1,25 @@
+rules:
+- id: swift-unsafe-force-unwrap
+  patterns:
+    - pattern-either:
+        - pattern: $EXPR!
+        - pattern: $EXPR as! $TYPE
+        - pattern: try! $EXPR
+    - pattern-not-inside: |
+        guard let $VAR = $EXPR else { ... }
+    - pattern-not-inside: |
+        if let $VAR = $EXPR { ... }
+    - pattern-not-inside: |
+        guard $EXPR != nil else { ... }
+    - pattern-not-inside: |
+        if $EXPR != nil { ... }
+    - pattern-not-inside: |
+        if case Optional.some(_) = $EXPR { ... }
+    - pattern-not: $EXPR!.$METHOD(...)
+  message: |
+    Unsafe force unwrap detected. Forced unwrapping an optional that contains 
+    'nil' will trigger a runtime error and crash the application. Consider using 
+    optional binding (if let), guard statements, or nil checks to safely handle 
+    potential 'nil' values.
+  languages: [swift]
+  severity: WARNING
